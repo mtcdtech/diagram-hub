@@ -22,6 +22,7 @@
 'use strict';
 
 const path    = require('path');
+const fs      = require('fs');
 const crypto  = require('crypto');
 const express = require('express');
 const db      = require('./db');
@@ -130,7 +131,36 @@ function applyViewLock(xml) {
 app.use(express.json({ limit: '10mb' }));  // diagrams can be large SVG-heavy XML
 
 // Serve everything in public/ as static files (index.html, diagram.html, etc.)
-app.use(express.static(path.join(__dirname, '..', 'public')));
+// `index: false` disables automatic index.html serving so our own `/` route
+// below can inject a cache-busting version query string on app.js/style.css.
+app.use(express.static(path.join(__dirname, '..', 'public'), { index: false }));
+
+// ---------------------------------------------------------------------------
+// Cache-busting for static assets
+// ---------------------------------------------------------------------------
+// A reverse proxy in front of this app may aggressively cache .js/.css by
+// file extension regardless of origin headers. BUILD_ID changes on every
+// container start (i.e. every deploy), so HTML pages reference
+// app.js?v=<BUILD_ID> / style.css?v=<BUILD_ID> — a URL the proxy has never
+// seen before, guaranteeing a fresh fetch after each release without
+// requiring users to hard-refresh or an operator to purge the proxy cache.
+const BUILD_ID = Date.now().toString(36);
+
+function sendVersionedHtml(res, filePath) {
+  const html = fs
+    .readFileSync(filePath, 'utf8')
+    // Matches both relative ("app.js") and absolute ("/app.js") references,
+    // used by index.html and diagram.html respectively.
+    .replace(/(src|href)="(\/?)(app\.js|style\.css)"/g, (_m, attr, slash, file) => `${attr}="${slash}${file}?v=${BUILD_ID}"`);
+  // The HTML itself should never be cached so it always picks up the latest
+  // versioned asset URLs.
+  res.set('Cache-Control', 'no-cache');
+  res.type('html').send(html);
+}
+
+app.get('/', (_req, res) => {
+  sendVersionedHtml(res, path.join(__dirname, '..', 'public', 'index.html'));
+});
 
 // ---------------------------------------------------------------------------
 // Healthcheck
@@ -301,7 +331,7 @@ app.get('/api/diagrams/:id/meta', (req, res) => {
 // ---------------------------------------------------------------------------
 
 app.get('/d/:id', (_req, res) => {
-  res.sendFile(path.join(__dirname, '..', 'public', 'diagram.html'));
+  sendVersionedHtml(res, path.join(__dirname, '..', 'public', 'diagram.html'));
 });
 
 // ---------------------------------------------------------------------------
