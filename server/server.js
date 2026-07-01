@@ -12,8 +12,9 @@
  *   GET    /api/diagrams/:id/comments               — list comment threads (public)
  *   POST   /api/diagrams/:id/comments               — create a comment thread (passphrase required)
  *   POST   /api/diagrams/:id/comments/:cid/replies  — reply to a thread (passphrase required)
- *   PATCH  /api/diagrams/:id/comments/:cid          — update priority (passphrase required)
+ *   PATCH  /api/diagrams/:id/comments/:cid          — update priority and/or position (passphrase required)
  *   PATCH  /api/diagrams/:id/comments/:cid/resolve  — resolve/reopen (MASTER passphrase required)
+ *   DELETE /api/diagrams/:id/comments/:cid          — delete a thread (MASTER passphrase required)
  *   GET    /healthz               — Docker healthcheck
  *
  * Static files in ../public/ are served at the root path.
@@ -544,7 +545,10 @@ app.post('/api/diagrams/:id/comments/:commentId/replies', (req, res) => {
   return res.status(201).json(serializeComment(comment, replies));
 });
 
-// PATCH /api/diagrams/:id/comments/:commentId — update priority (diagram passphrase gate)
+// PATCH /api/diagrams/:id/comments/:commentId — update priority and/or x/y position
+// (diagram passphrase gate). Accepts any combination of `priority` and
+// `x`+`y` in the body; only the fields provided are updated. Moving a
+// comment's anchor point (dragging its dot) requires BOTH x and y together.
 app.patch('/api/diagrams/:id/comments/:commentId', (req, res) => {
   const { id, commentId } = req.params;
   const diagram = getDiagramRow(id);
@@ -560,15 +564,60 @@ app.patch('/api/diagrams/:id/comments/:commentId', (req, res) => {
     return res.status(404).json({ error: 'Comment thread not found.' });
   }
 
-  const { priority } = req.body;
-  if (!VALID_PRIORITIES.includes(priority)) {
-    return res.status(400).json({ error: `priority must be one of: ${VALID_PRIORITIES.join(', ')}.` });
+  const { priority, x, y } = req.body;
+  const setClauses = [];
+  const params = [];
+
+  if (priority !== undefined) {
+    if (!VALID_PRIORITIES.includes(priority)) {
+      return res.status(400).json({ error: `priority must be one of: ${VALID_PRIORITIES.join(', ')}.` });
+    }
+    setClauses.push('priority = ?');
+    params.push(priority);
   }
 
-  db.prepare('UPDATE comments SET priority = ? WHERE id = ?').run(priority, commentId);
+  if (x !== undefined || y !== undefined) {
+    if (typeof x !== 'number' || typeof y !== 'number' || !Number.isFinite(x) || !Number.isFinite(y)) {
+      return res.status(400).json({ error: 'x and y must both be provided as numbers to move a comment.' });
+    }
+    setClauses.push('x = ?', 'y = ?');
+    params.push(x, y);
+  }
+
+  if (setClauses.length === 0) {
+    return res.status(400).json({ error: 'Provide priority and/or x and y to update.' });
+  }
+
+  params.push(commentId);
+  db.prepare(`UPDATE comments SET ${setClauses.join(', ')} WHERE id = ?`).run(...params);
+
   const replies = db.prepare('SELECT * FROM comment_replies WHERE comment_id = ? ORDER BY created_at ASC').all(commentId);
   const updated = db.prepare('SELECT * FROM comments WHERE id = ?').get(commentId);
   return res.json(serializeComment(updated, replies));
+});
+
+// DELETE /api/diagrams/:id/comments/:commentId — permanently delete a comment
+// thread and its replies. Gated by the MASTER/shared passphrase specifically
+// (requirePassphrase), matching the admin-only gate already used for
+// resolve/reopen — deleting is irreversible, more so than resolving.
+app.delete('/api/diagrams/:id/comments/:commentId', requirePassphrase, (req, res) => {
+  const { id, commentId } = req.params;
+  const diagram = getDiagramRow(id);
+  if (!diagram) {
+    return res.status(404).json({ error: 'Diagram not found.' });
+  }
+
+  const comment = db.prepare('SELECT id FROM comments WHERE id = ? AND diagram_id = ?').get(commentId, id);
+  if (!comment) {
+    return res.status(404).json({ error: 'Comment thread not found.' });
+  }
+
+  // No SQL foreign keys are declared, so cascade-delete replies manually
+  // (same pattern as DELETE /api/diagrams/:id above).
+  db.prepare('DELETE FROM comment_replies WHERE comment_id = ?').run(commentId);
+  db.prepare('DELETE FROM comments WHERE id = ?').run(commentId);
+
+  return res.status(204).send();
 });
 
 // PATCH /api/diagrams/:id/comments/:commentId/resolve — resolve/reopen (MASTER passphrase only)

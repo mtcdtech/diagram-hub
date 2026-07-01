@@ -653,6 +653,19 @@ a:hover { text-decoration: underline; }
   transition: width .12s ease, height .12s ease, margin .12s ease, box-shadow .12s ease;
 }
 
+/* Draggable dots (view mode only) — grab cursor at rest, grabbing + lifted
+   while actively being dragged to reposition a comment's anchor point. */
+.comment-dot.dot-draggable {
+  cursor: grab;
+  touch-action: none;
+}
+.comment-dot.dragging {
+  cursor: grabbing;
+  opacity: .85;
+  z-index: 2;
+  box-shadow: 0 2px 8px rgba(0,0,0,.55);
+}
+
 /* ── Hover connector line (dot ↔ its comment card) ────────────────────── */
 
 .comment-hover-line-svg {

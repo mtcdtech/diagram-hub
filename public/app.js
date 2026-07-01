@@ -417,7 +417,7 @@ class DiagramViewer {
       highlight: '#0000ff',
       nav:       true,
       resize:    true,
-      toolbar:   'zoom layers lightbox',
+      toolbar:   'pages zoom layers lightbox',
       // Disable GraphViewer's default "single click opens fullscreen lightbox"
       // behavior. Without this, clicking the canvas (e.g. to interact with the
       // hover toolbar/layers panel) instead popped open the lightbox overlay,
@@ -810,6 +810,55 @@ async function apiResolveComment(diagramId, commentId, resolved, passphrase) {
       'X-Edit-Passphrase': passphrase,
     },
     body: JSON.stringify({ resolved }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+/**
+ * DELETE /api/diagrams/:id/comments/:commentId — permanently delete a
+ * comment thread and its replies. Requires the MASTER/shared passphrase
+ * (admin-only action, same gate as resolve/reopen).
+ * @param {string} diagramId
+ * @param {string} commentId
+ * @param {string} passphrase
+ * @returns {Promise<void>}
+ */
+async function apiDeleteComment(diagramId, commentId, passphrase) {
+  const res = await fetch(`/api/diagrams/${diagramId}/comments/${commentId}`, {
+    method:  'DELETE',
+    headers: {
+      'X-Edit-Passphrase': passphrase,
+    },
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return true;
+}
+
+/**
+ * PATCH /api/diagrams/:id/comments/:commentId — move a comment's anchor
+ * point (drag its dot). Requires the diagram edit passphrase.
+ * @param {string} diagramId
+ * @param {string} commentId
+ * @param {number} x
+ * @param {number} y
+ * @param {string} passphrase
+ * @returns {Promise<Object>}
+ */
+async function apiUpdateCommentPosition(diagramId, commentId, x, y, passphrase) {
+  const res = await fetch(`/api/diagrams/${diagramId}/comments/${commentId}`, {
+    method:  'PATCH',
+    headers: {
+      'Content-Type':      'application/json',
+      'X-Edit-Passphrase': passphrase,
+    },
+    body: JSON.stringify({ x, y }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));

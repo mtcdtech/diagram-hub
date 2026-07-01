@@ -646,6 +646,7 @@
           <button class="btn btn-secondary btn-sm reply-submit-btn">Reply</button>
         </div>
         <div class="comment-thread-actions">
+          <button class="btn btn-secondary btn-sm delete-comment-btn">Delete</button>
           <button class="btn ${isResolved ? 'btn-secondary' : 'btn-primary'} btn-sm resolve-toggle-btn">
             ${isResolved ? 'Reopen' : 'Resolve'}
           </button>
@@ -683,6 +684,14 @@
       if (!comment) return;
       const wantResolved = comment.status !== 'resolved';
       withAdminPermission((passphrase) => attemptResolve(commentId, wantResolved, passphrase));
+      return;
+    }
+    const deleteBtn = evt.target.closest('.delete-comment-btn');
+    if (deleteBtn) {
+      const card = deleteBtn.closest('.comment-thread');
+      const commentId = card.dataset.commentId;
+      if (!confirm('Delete this comment thread? This cannot be undone.')) return;
+      withAdminPermission((passphrase) => attemptDeleteComment(commentId, passphrase));
       return;
     }
   });
@@ -744,6 +753,19 @@
     } catch (e) {
       if (isAuthError(e)) clearCachedPassphrase();
       showToast(`Could not update comment: ${e.message}`, 'error');
+    }
+  }
+
+  async function attemptDeleteComment(commentId, passphrase) {
+    try {
+      await apiDeleteComment(diagramId, commentId, passphrase);
+      comments = comments.filter((c) => c.id !== commentId);
+      renderComments();
+      renderDots();
+      showToast('Comment deleted.', 'success');
+    } catch (e) {
+      if (isAuthError(e)) clearCachedPassphrase();
+      showToast(`Could not delete comment: ${e.message}`, 'error');
     }
   }
 
@@ -916,11 +938,90 @@
         dot.style.left = `${pos.x}px`;
         dot.style.top  = `${pos.y}px`;
         dot.title = `${c.authorName}: ${c.body.slice(0, 80)}`;
-        dot.addEventListener('click', () => highlightCommentCard(c.id));
+        dot.addEventListener('click', () => {
+          // A drag that just ended fires a synthetic click right after —
+          // suppress that one so dragging doesn't also open the card.
+          if (dot.dataset.dragged === '1') { delete dot.dataset.dragged; return; }
+          highlightCommentCard(c.id);
+        });
         dot.addEventListener('mouseenter', () => startDotHover(dot, c.id));
         dot.addEventListener('mouseleave', () => clearHover());
+        // Dragging a dot to reposition it is only supported in view mode —
+        // edit mode's coordinate math is an approximation (see
+        // graphPointToLayerPoint) and doesn't have a reliable inverse.
+        if (currentMode === 'view') {
+          dot.classList.add('dot-draggable');
+          dot.addEventListener('pointerdown', (evt) => startDotDrag(evt, dot, c));
+        }
         commentDotsLayer.appendChild(dot);
       });
+  }
+
+  const DOT_DRAG_THRESHOLD_PX = 4;
+
+  function startDotDrag(evt, dot, comment) {
+    if (evt.button !== undefined && evt.button !== 0) return; // left-click / primary touch only
+    evt.preventDefault();
+    const startX = evt.clientX;
+    const startY = evt.clientY;
+    const startLeft = parseFloat(dot.style.left) || 0;
+    const startTop  = parseFloat(dot.style.top)  || 0;
+    let dragging = false;
+
+    try { dot.setPointerCapture(evt.pointerId); } catch (_) { /* ignore */ }
+
+    function onMove(moveEvt) {
+      const dx = moveEvt.clientX - startX;
+      const dy = moveEvt.clientY - startY;
+      if (!dragging && Math.hypot(dx, dy) < DOT_DRAG_THRESHOLD_PX) return;
+      dragging = true;
+      dot.classList.add('dragging');
+      clearHover();
+      dot.style.left = `${startLeft + dx}px`;
+      dot.style.top  = `${startTop + dy}px`;
+    }
+
+    function onUp(upEvt) {
+      dot.removeEventListener('pointermove', onMove);
+      dot.removeEventListener('pointerup', onUp);
+      dot.removeEventListener('pointercancel', onCancel);
+      dot.classList.remove('dragging');
+      try { dot.releasePointerCapture(upEvt.pointerId); } catch (_) { /* ignore */ }
+
+      if (!dragging) return; // it was just a click — the dot's own click handler runs normally
+      dot.dataset.dragged = '1'; // suppress the click that follows a drag release
+
+      if (!embed || !embed.screenToGraphPoint) { renderDots(); return; }
+      const point = embed.screenToGraphPoint(upEvt.clientX, upEvt.clientY);
+      if (!point) { renderDots(); return; }
+
+      withEditPermission((passphrase) => persistDotMove(comment.id, point, passphrase));
+    }
+
+    function onCancel() {
+      dot.removeEventListener('pointermove', onMove);
+      dot.removeEventListener('pointerup', onUp);
+      dot.removeEventListener('pointercancel', onCancel);
+      dot.classList.remove('dragging');
+      renderDots(); // snap back to the last known server position
+    }
+
+    dot.addEventListener('pointermove', onMove);
+    dot.addEventListener('pointerup', onUp);
+    dot.addEventListener('pointercancel', onCancel);
+  }
+
+  async function persistDotMove(commentId, point, passphrase) {
+    try {
+      const updated = await apiUpdateCommentPosition(diagramId, commentId, point.x, point.y, passphrase);
+      applyCommentUpdate(updated);
+      renderDots();
+      showToast('Comment moved.', 'success');
+    } catch (e) {
+      if (isAuthError(e)) clearCachedPassphrase();
+      showToast(`Could not move comment: ${e.message}`, 'error');
+      renderDots(); // snap back to the last known server position
+    }
   }
 
   function highlightCommentCard(commentId) {
