@@ -8,7 +8,7 @@
 </head>
 <body>
 
-<!-- Full-height flex layout: toolbar → optional banner → iframe -->
+<!-- Full-height flex layout: toolbar → optional banner → (diagram | comments) row -->
 <div class="diagram-page" id="diagram-page">
 
   <!-- ── Toolbar ──────────────────────────────────────────────────────── -->
@@ -26,6 +26,8 @@
     <span class="mode-badge" id="mode-badge">VIEW</span>
 
     <!-- Action buttons -->
+    <button id="add-comment-btn"      class="btn btn-secondary btn-sm">+ Comment</button>
+    <button id="comments-toggle-btn"  class="btn btn-secondary btn-sm">Comments</button>
     <button id="edit-btn"  class="btn btn-primary  btn-sm">Edit</button>
     <button id="share-btn" class="btn btn-secondary btn-sm">Share</button>
   </div>
@@ -37,29 +39,54 @@
     <button id="banner-dismiss" class="btn btn-sm" style="color:var(--color-text-muted)">✕</button>
   </div>
 
-  <!-- ── draw.io iframe / viewer wrapper ─────────────────────────────── -->
-  <div class="iframe-wrapper">
-    <div class="loading-overlay" id="loading-overlay">
-      <div class="spinner"></div>
+  <!-- ── Body row: diagram (left) + comments sidebar (right) ─────────── -->
+  <div class="diagram-body">
+
+    <div class="diagram-main">
+      <!-- ── draw.io iframe / viewer wrapper ─────────────────────────── -->
+      <div class="iframe-wrapper">
+        <div class="loading-overlay" id="loading-overlay">
+          <div class="spinner"></div>
+        </div>
+        <!-- View mode: read-only static viewer (zoom/pan/layers, no editing). -->
+        <div id="viewer-container" class="viewer-container hidden"></div>
+        <!-- Edit mode: full draw.io editor iframe. -->
+        <iframe
+          id="drawio-frame"
+          class="hidden"
+          title="draw.io diagram editor"
+          allow="clipboard-read; clipboard-write"
+        ></iframe>
+        <!-- Transparent overlay that captures pin-placement clicks when
+             "Add Comment" mode is armed. Sits above both the viewer and the
+             editor iframe, since both render inside this same wrapper. -->
+        <div id="comment-click-layer" class="comment-click-layer"></div>
+        <!-- Color-coded dot markers for open (unresolved) comment threads. -->
+        <div id="comment-dots-layer" class="comment-dots-layer"></div>
+      </div>
     </div>
-    <!-- View mode: read-only static viewer (zoom/pan/layers, no editing). -->
-    <div id="viewer-container" class="viewer-container hidden"></div>
-    <!-- Edit mode: full draw.io editor iframe. -->
-    <iframe
-      id="drawio-frame"
-      class="hidden"
-      title="draw.io diagram editor"
-      allow="clipboard-read; clipboard-write"
-    ></iframe>
-  </div>
+
+    <!-- ── Comments sidebar ─────────────────────────────────────────── -->
+    <aside id="comments-panel" class="comments-panel">
+      <div class="comments-panel-header">
+        <h3>Comments</h3>
+        <label class="comments-show-resolved">
+          <input type="checkbox" id="show-resolved-checkbox" /> Show resolved
+        </label>
+        <button id="comments-panel-collapse" class="btn btn-sm" style="color:var(--color-text-muted)">✕</button>
+      </div>
+      <div id="comments-list" class="comments-list"></div>
+    </aside>
+
+  </div><!-- /.diagram-body -->
 
 </div><!-- /.diagram-page -->
 
-<!-- Passphrase modal (shown when Edit is clicked without a cached passphrase) -->
+<!-- Passphrase modal (generic — reused for Edit, commenting, and admin resolve) -->
 <div class="modal-overlay hidden" id="passphrase-modal">
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
     <h3 id="modal-title">Enter edit passphrase</h3>
-    <p>
+    <p id="modal-description">
       Editing requires a shared passphrase. It will be remembered for this
       browser session only.
     </p>
@@ -72,7 +99,38 @@
     <span id="modal-error" class="auth-error hidden">Incorrect passphrase.</span>
     <div class="modal-actions">
       <button id="modal-cancel" class="btn btn-secondary">Cancel</button>
-      <button id="modal-submit" class="btn btn-primary">Unlock Edit</button>
+      <button id="modal-submit" class="btn btn-primary">Unlock</button>
+    </div>
+  </div>
+</div>
+
+<!-- Comment composer modal (shown when a pin is placed) -->
+<div class="modal-overlay hidden" id="comment-composer-modal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="comment-composer-title">
+    <h3 id="comment-composer-title">Add comment</h3>
+    <div id="comment-composer-name-row">
+      <input
+        id="comment-composer-name"
+        type="text"
+        placeholder="Your name…"
+        maxlength="60"
+      />
+    </div>
+    <select id="comment-composer-priority">
+      <option value="low">Low priority</option>
+      <option value="medium" selected>Medium priority</option>
+      <option value="high">High priority</option>
+    </select>
+    <textarea
+      id="comment-composer-body"
+      placeholder="Write a comment…"
+      rows="4"
+      maxlength="4000"
+    ></textarea>
+    <span id="comment-composer-error" class="auth-error hidden"></span>
+    <div class="modal-actions">
+      <button id="comment-composer-cancel" class="btn btn-secondary">Cancel</button>
+      <button id="comment-composer-submit" class="btn btn-primary">Post Comment</button>
     </div>
   </div>
 </div>
@@ -90,31 +148,58 @@
   }
 
   // ── DOM refs ─────────────────────────────────────────────────────────────
-  const iframe         = document.getElementById('drawio-frame');
+  const iframe          = document.getElementById('drawio-frame');
   const viewerContainer = document.getElementById('viewer-container');
-  const titleEl        = document.getElementById('diagram-title');
-  const metaEl         = document.getElementById('diagram-meta');
-  const modeBadge      = document.getElementById('mode-badge');
-  const editBtn        = document.getElementById('edit-btn');
-  const shareBtn       = document.getElementById('share-btn');
-  const changesBanner  = document.getElementById('changes-banner');
-  const bannerMsg      = document.getElementById('banner-msg');
-  const bannerReload   = document.getElementById('banner-reload');
-  const bannerDismiss  = document.getElementById('banner-dismiss');
-  const loadingOverlay = document.getElementById('loading-overlay');
+  const titleEl         = document.getElementById('diagram-title');
+  const metaEl          = document.getElementById('diagram-meta');
+  const modeBadge       = document.getElementById('mode-badge');
+  const editBtn         = document.getElementById('edit-btn');
+  const shareBtn        = document.getElementById('share-btn');
+  const changesBanner   = document.getElementById('changes-banner');
+  const bannerMsg       = document.getElementById('banner-msg');
+  const bannerReload    = document.getElementById('banner-reload');
+  const bannerDismiss   = document.getElementById('banner-dismiss');
+  const loadingOverlay  = document.getElementById('loading-overlay');
 
-  const passphraseModal = document.getElementById('passphrase-modal');
-  const modalPassphrase = document.getElementById('modal-passphrase');
-  const modalError      = document.getElementById('modal-error');
-  const modalCancel     = document.getElementById('modal-cancel');
-  const modalSubmit     = document.getElementById('modal-submit');
+  const passphraseModal   = document.getElementById('passphrase-modal');
+  const modalTitle        = document.getElementById('modal-title');
+  const modalDescription  = document.getElementById('modal-description');
+  const modalPassphrase   = document.getElementById('modal-passphrase');
+  const modalError        = document.getElementById('modal-error');
+  const modalCancel       = document.getElementById('modal-cancel');
+  const modalSubmit       = document.getElementById('modal-submit');
+
+  const addCommentBtn       = document.getElementById('add-comment-btn');
+  const commentsToggleBtn   = document.getElementById('comments-toggle-btn');
+  const commentsPanel       = document.getElementById('comments-panel');
+  const commentsPanelClose  = document.getElementById('comments-panel-collapse');
+  const commentsList        = document.getElementById('comments-list');
+  const showResolvedCheckbox = document.getElementById('show-resolved-checkbox');
+  const commentClickLayer   = document.getElementById('comment-click-layer');
+  const commentDotsLayer    = document.getElementById('comment-dots-layer');
+
+  const commentComposerModal    = document.getElementById('comment-composer-modal');
+  const commentComposerNameRow  = document.getElementById('comment-composer-name-row');
+  const commentComposerName     = document.getElementById('comment-composer-name');
+  const commentComposerPriority = document.getElementById('comment-composer-priority');
+  const commentComposerBody     = document.getElementById('comment-composer-body');
+  const commentComposerError    = document.getElementById('comment-composer-error');
+  const commentComposerCancel   = document.getElementById('comment-composer-cancel');
+  const commentComposerSubmit   = document.getElementById('comment-composer-submit');
 
   // ── State ────────────────────────────────────────────────────────────────
   let currentMode  = 'view';      // 'view' | 'edit'
   let lastUpdatedAt = 0;          // used by polling
-  let embed        = null;        // DiagramEmbed instance
+  let embed        = null;        // DiagramEmbed | DiagramViewer instance
   let stopPolling  = null;        // function to cancel the polling loop
   let metaInterval = null;        // for updating "X min ago" display
+  let stopWatchingView = null;    // function to cancel DiagramViewer.watchViewChanges
+
+  let comments = [];              // cached comment threads for this diagram
+  let showResolved = false;
+  let commentsPanelVisible = true;
+  let commentModeArmed = false;
+  let pendingCommentPoint = null; // {x, y} graph/page coords picked for a new comment
 
   // ── Initialise in view mode ───────────────────────────────────────────────
 
@@ -150,7 +235,11 @@
     embed = new DiagramViewer({
       container: viewerContainer,
       diagramId,
-      onReady: () => { loadingOverlay.classList.add('hidden'); },
+      onReady: () => {
+        loadingOverlay.classList.add('hidden');
+        renderDots();
+        stopWatchingView = embed.watchViewChanges(() => renderDots());
+      },
     });
 
     loadingOverlay.classList.remove('hidden');
@@ -196,7 +285,10 @@
         lastUpdatedAt = updatedAt;
         updateMetaDisplay(updatedAt);
       },
-      onReady:    () => { loadingOverlay.classList.add('hidden'); },
+      onReady:    () => {
+        loadingOverlay.classList.add('hidden');
+        renderDots();
+      },
     });
 
     loadingOverlay.classList.remove('hidden');
@@ -226,10 +318,13 @@
   }
 
   function destroyEmbed() {
+    disarmCommentMode();
+    if (stopWatchingView) { stopWatchingView(); stopWatchingView = null; }
     if (embed) { embed.destroy(); embed = null; }
     if (stopPolling) { stopPolling(); stopPolling = null; }
     if (metaInterval) { clearInterval(metaInterval); metaInterval = null; }
     changesBanner.classList.add('hidden');
+    commentDotsLayer.innerHTML = '';
   }
 
   // ── Polling ───────────────────────────────────────────────────────────────
@@ -260,6 +355,7 @@
         loadingOverlay.classList.remove('hidden');
         await embed.refresh();
         loadingOverlay.classList.add('hidden');
+        renderDots();
       }
     } else {
       // In edit mode: warn that unsaved edits may be overwritten by a reload.
@@ -268,6 +364,7 @@
           loadingOverlay.classList.remove('hidden');
           await embed.refresh();
           loadingOverlay.classList.add('hidden');
+          renderDots();
         }
       }
     }
@@ -303,7 +400,15 @@
     if (resolved) {
       await initEdit(resolved.passphrase, resolved.source);
     } else {
-      openPassphraseModal();
+      openPassphraseModal({
+        title: 'Enter edit passphrase',
+        description: 'Editing requires a shared passphrase. It will be remembered for this browser session only.',
+        onSubmit: async (passphrase) => {
+          await verifyDiagramPassphrase(passphrase);
+          setCachedDiagramPassphrase(diagramId, passphrase);
+          await initEdit(passphrase, 'diagram');
+        },
+      });
     }
   });
 
@@ -316,9 +421,24 @@
       .catch(() => showToast(`Share URL: ${url}`, 'info', 6000));
   });
 
-  // ── Passphrase modal ──────────────────────────────────────────────────────
+  // ── Generic passphrase modal ─────────────────────────────────────────────
+  //
+  // Reused for three flows, each supplying its own title/description and an
+  // onSubmit(passphrase) callback that must either resolve (success — the
+  // modal closes) or throw an Error. Throw an Error with `.unauthorized =
+  // true` to show the inline "Incorrect passphrase" state and let the user
+  // retry; any other thrown Error is surfaced as a toast and the modal stays
+  // open with the passphrase field cleared for a retry.
+  //   1. Edit button        → validates against the diagram passphrase gate.
+  //   2. Commenting/replies → same diagram passphrase gate.
+  //   3. Admin resolve      → validates against the MASTER-only gate.
 
-  function openPassphraseModal() {
+  let passphraseModalOnSubmit = null;
+
+  function openPassphraseModal({ title, description, onSubmit }) {
+    modalTitle.textContent = title;
+    modalDescription.textContent = description;
+    passphraseModalOnSubmit = onSubmit;
     passphraseModal.classList.remove('hidden');
     modalPassphrase.value = '';
     modalError.classList.add('hidden');
@@ -329,6 +449,7 @@
     passphraseModal.classList.add('hidden');
     modalPassphrase.value = '';
     modalError.classList.add('hidden');
+    passphraseModalOnSubmit = null;
   }
 
   modalCancel.addEventListener('click', closePassphraseModal);
@@ -339,30 +460,21 @@
 
   async function submitPassphrase() {
     const passphrase = modalPassphrase.value;
-    if (!passphrase) return;
+    if (!passphrase || !passphraseModalOnSubmit) return;
 
     modalSubmit.disabled = true;
     modalError.classList.add('hidden');
-
-    // Validate passphrase by attempting a GET in edit mode.
     try {
-      const res = await fetch(`/api/diagrams/${diagramId}?mode=edit`, {
-        headers: { 'X-Edit-Passphrase': passphrase },
-      });
-      if (res.status === 401) {
+      await passphraseModalOnSubmit(passphrase);
+      closePassphraseModal();
+    } catch (e) {
+      if (e && e.unauthorized) {
+        modalError.textContent = e.message || 'Incorrect passphrase.';
         modalError.classList.remove('hidden');
         modalPassphrase.select();
-        return;
+      } else {
+        showToast(`Network error: ${e.message}`, 'error');
       }
-      // Passphrase accepted. Cache it under the per-diagram key (not the
-      // global shared-passphrase key) so it never overwrites/pollutes the
-      // hub-level session credential — this may just be this diagram's own
-      // passphrase, not the shared one.
-      setCachedDiagramPassphrase(diagramId, passphrase);
-      closePassphraseModal();
-      await initEdit(passphrase, 'diagram');
-    } catch (e) {
-      showToast(`Network error: ${e.message}`, 'error');
     } finally {
       modalSubmit.disabled = false;
     }
@@ -374,10 +486,424 @@
     if (e.key === 'Escape') closePassphraseModal();
   });
 
+  /** Validate a candidate passphrase against the diagram's edit gate
+   *  (shared/master OR this diagram's own passphrase). Throws an
+   *  `.unauthorized` Error on rejection. */
+  async function verifyDiagramPassphrase(passphrase) {
+    const res = await fetch(`/api/diagrams/${diagramId}?mode=edit`, {
+      headers: { 'X-Edit-Passphrase': passphrase },
+    });
+    if (res.status === 401) {
+      const err = new Error('Incorrect passphrase.');
+      err.unauthorized = true;
+      throw err;
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  }
+
+  /** Validate a candidate passphrase against the MASTER-only admin gate
+   *  (used for resolving/reopening comment threads). Throws an
+   *  `.unauthorized` Error on rejection. */
+  async function verifyMasterPassphrase(passphrase) {
+    const res = await fetch('/api/diagrams', {
+      headers: { 'X-Edit-Passphrase': passphrase },
+    });
+    if (res.status === 401) {
+      const err = new Error('Incorrect passphrase.');
+      err.unauthorized = true;
+      throw err;
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  }
+
+  /** Run `action(passphrase)` using a cached diagram/shared passphrase if
+   *  available; otherwise prompt for one, validate it, cache it, then run. */
+  function withEditPermission(action) {
+    const resolved = resolveEditPassphrase(diagramId);
+    if (resolved) { action(resolved.passphrase); return; }
+    openPassphraseModal({
+      title: 'Enter passphrase',
+      description: 'This action requires the shared or diagram passphrase. It will be remembered for this browser session only.',
+      onSubmit: async (passphrase) => {
+        await verifyDiagramPassphrase(passphrase);
+        setCachedDiagramPassphrase(diagramId, passphrase);
+        action(passphrase);
+      },
+    });
+  }
+
+  /** Run `action(passphrase)` using the cached MASTER/shared passphrase if
+   *  available; otherwise prompt for it specifically (a diagram-only
+   *  passphrase is NOT accepted for admin actions like resolving). */
+  function withAdminPermission(action) {
+    const master = getCachedPassphrase();
+    if (master) { action(master); return; }
+    openPassphraseModal({
+      title: 'Enter admin passphrase',
+      description: 'Resolving or reopening a comment thread requires the shared/master passphrase.',
+      onSubmit: async (passphrase) => {
+        await verifyMasterPassphrase(passphrase);
+        setCachedPassphrase(passphrase);
+        action(passphrase);
+      },
+    });
+  }
+
+  function isAuthError(e) {
+    return !!e && typeof e.message === 'string' && /passphrase/i.test(e.message);
+  }
+
+  // ── Comments: data + rendering ──────────────────────────────────────────
+
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str == null ? '' : String(str);
+    return div.innerHTML;
+  }
+
+  async function loadComments() {
+    try {
+      comments = await apiListComments(diagramId);
+    } catch (e) {
+      showToast(`Could not load comments: ${e.message}`, 'error');
+      comments = [];
+    }
+    renderComments();
+    renderDots();
+  }
+
+  function applyCommentUpdate(updated) {
+    const idx = comments.findIndex((c) => c.id === updated.id);
+    if (idx >= 0) comments[idx] = updated;
+    else comments.push(updated);
+  }
+
+  function renderCommentCard(c, cachedName) {
+    const repliesHtml = c.replies.map((r) => `
+      <div class="comment-reply">
+        <div class="comment-author">${escapeHtml(r.authorName)} <span class="comment-time">${relativeTime(r.createdAt)}</span></div>
+        <div class="comment-text">${escapeHtml(r.body)}</div>
+      </div>
+    `).join('');
+
+    const nameFieldHtml = cachedName
+      ? ''
+      : `<input type="text" class="reply-name-input" placeholder="Your name…" maxlength="60" />`;
+
+    const isResolved = c.status === 'resolved';
+
+    return `
+      <div class="comment-thread ${isResolved ? 'resolved' : ''}" data-comment-id="${c.id}">
+        <div class="comment-thread-header">
+          <span class="priority-dot priority-${c.priority}"></span>
+          <select class="priority-select" title="Change priority">
+            <option value="low"    ${c.priority === 'low'    ? 'selected' : ''}>Low</option>
+            <option value="medium" ${c.priority === 'medium' ? 'selected' : ''}>Medium</option>
+            <option value="high"   ${c.priority === 'high'   ? 'selected' : ''}>High</option>
+          </select>
+          <span class="comment-status-badge ${c.status}">${isResolved ? 'Resolved' : 'Open'}</span>
+        </div>
+        <div class="comment-body">
+          <div class="comment-author">${escapeHtml(c.authorName)} <span class="comment-time">${relativeTime(c.createdAt)}</span></div>
+          <div class="comment-text">${escapeHtml(c.body)}</div>
+        </div>
+        ${c.replies.length ? `<div class="comment-replies">${repliesHtml}</div>` : ''}
+        <div class="comment-reply-form">
+          ${nameFieldHtml}
+          <textarea class="reply-body-input" rows="2" placeholder="Reply…" maxlength="4000"></textarea>
+          <button class="btn btn-secondary btn-sm reply-submit-btn">Reply</button>
+        </div>
+        <div class="comment-thread-actions">
+          <button class="btn ${isResolved ? 'btn-secondary' : 'btn-primary'} btn-sm resolve-toggle-btn">
+            ${isResolved ? 'Reopen' : 'Resolve'}
+          </button>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderComments() {
+    const cachedName = getCachedCommenterName();
+    const visible = comments
+      .filter((c) => showResolved || c.status !== 'resolved')
+      .slice()
+      .sort((a, b) => b.createdAt - a.createdAt);
+
+    if (visible.length === 0) {
+      commentsList.innerHTML = '<div class="comments-empty text-muted">No comments yet. Click "+ Comment" and click a point on the diagram.</div>';
+      return;
+    }
+    commentsList.innerHTML = visible.map((c) => renderCommentCard(c, cachedName)).join('');
+  }
+
+  commentsList.addEventListener('click', (evt) => {
+    const replyBtn = evt.target.closest('.reply-submit-btn');
+    if (replyBtn) {
+      const card = replyBtn.closest('.comment-thread');
+      submitReply(card.dataset.commentId, card);
+      return;
+    }
+    const resolveBtn = evt.target.closest('.resolve-toggle-btn');
+    if (resolveBtn) {
+      const card = resolveBtn.closest('.comment-thread');
+      const commentId = card.dataset.commentId;
+      const comment = comments.find((c) => c.id === commentId);
+      if (!comment) return;
+      const wantResolved = comment.status !== 'resolved';
+      withAdminPermission((passphrase) => attemptResolve(commentId, wantResolved, passphrase));
+      return;
+    }
+  });
+
+  commentsList.addEventListener('change', (evt) => {
+    const select = evt.target.closest('.priority-select');
+    if (!select) return;
+    const card = select.closest('.comment-thread');
+    changePriority(card.dataset.commentId, select.value);
+  });
+
+  function submitReply(commentId, card) {
+    const bodyInput = card.querySelector('.reply-body-input');
+    const body = bodyInput.value.trim();
+    if (!body) { showToast('Reply text is required.', 'error'); return; }
+
+    const cachedName = getCachedCommenterName();
+    let authorName = cachedName;
+    if (!authorName) {
+      const nameInput = card.querySelector('.reply-name-input');
+      authorName = nameInput ? nameInput.value.trim() : '';
+      if (!authorName) { showToast('Name is required.', 'error'); return; }
+    }
+
+    withEditPermission(async (passphrase) => {
+      try {
+        const updated = await apiReplyComment(diagramId, commentId, { authorName, body }, passphrase);
+        if (!cachedName) setCachedCommenterName(authorName);
+        applyCommentUpdate(updated);
+        renderComments();
+        showToast('Reply posted.', 'success');
+      } catch (e) {
+        showToast(`Could not post reply: ${e.message}`, 'error');
+      }
+    });
+  }
+
+  function changePriority(commentId, newPriority) {
+    withEditPermission(async (passphrase) => {
+      try {
+        const updated = await apiUpdateCommentPriority(diagramId, commentId, newPriority, passphrase);
+        applyCommentUpdate(updated);
+        renderComments();
+        renderDots();
+      } catch (e) {
+        showToast(`Could not update priority: ${e.message}`, 'error');
+        renderComments(); // revert the <select> to the last known value
+      }
+    });
+  }
+
+  async function attemptResolve(commentId, resolved, passphrase) {
+    try {
+      const updated = await apiResolveComment(diagramId, commentId, resolved, passphrase);
+      applyCommentUpdate(updated);
+      renderComments();
+      renderDots();
+      showToast(resolved ? 'Comment resolved.' : 'Comment reopened.', 'success');
+    } catch (e) {
+      if (isAuthError(e)) clearCachedPassphrase();
+      showToast(`Could not update comment: ${e.message}`, 'error');
+    }
+  }
+
+  showResolvedCheckbox.addEventListener('change', () => {
+    showResolved = showResolvedCheckbox.checked;
+    renderComments();
+  });
+
+  // ── Comments panel show/hide ──────────────────────────────────────────
+
+  function setCommentsPanelVisible(visible) {
+    commentsPanelVisible = visible;
+    commentsPanel.classList.toggle('collapsed', !visible);
+    setTimeout(renderDots, 0); // layer size may have changed
+  }
+
+  commentsToggleBtn.addEventListener('click', () => setCommentsPanelVisible(!commentsPanelVisible));
+  commentsPanelClose.addEventListener('click', () => setCommentsPanelVisible(false));
+
+  // ── Pin placement ("Add Comment") ────────────────────────────────────
+
+  function armCommentMode() {
+    commentModeArmed = true;
+    commentClickLayer.classList.add('armed');
+    addCommentBtn.textContent = 'Cancel';
+    addCommentBtn.classList.remove('btn-secondary');
+    addCommentBtn.classList.add('btn-primary');
+    showToast('Click a point on the diagram to place your comment.', 'info', 4000);
+  }
+
+  function disarmCommentMode() {
+    commentModeArmed = false;
+    commentClickLayer.classList.remove('armed');
+    addCommentBtn.textContent = '+ Comment';
+    addCommentBtn.classList.remove('btn-primary');
+    addCommentBtn.classList.add('btn-secondary');
+  }
+
+  addCommentBtn.addEventListener('click', () => {
+    if (commentModeArmed) { disarmCommentMode(); return; }
+    if (!embed) { showToast('Diagram not ready yet.', 'error'); return; }
+    withEditPermission(() => armCommentMode());
+  });
+
+  function captureClickPoint(evt) {
+    if (currentMode === 'view' && embed && embed.screenToGraphPoint) {
+      return embed.screenToGraphPoint(evt.clientX, evt.clientY);
+    }
+    if (currentMode === 'edit' && embed && embed.getPageDimensions) {
+      const rect = commentClickLayer.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) return null;
+      const dims = embed.getPageDimensions();
+      const fx = (evt.clientX - rect.left) / rect.width;
+      const fy = (evt.clientY - rect.top)  / rect.height;
+      return { x: fx * dims.width, y: fy * dims.height };
+    }
+    return null;
+  }
+
+  commentClickLayer.addEventListener('click', (evt) => {
+    if (!commentModeArmed) return;
+    const point = captureClickPoint(evt);
+    disarmCommentMode();
+    if (!point) { showToast('Could not determine click position — try again.', 'error'); return; }
+    openCommentComposer(point);
+  });
+
+  // ── Comment composer modal ────────────────────────────────────────────
+
+  function openCommentComposer(point) {
+    pendingCommentPoint = point;
+    const cachedName = getCachedCommenterName();
+    commentComposerNameRow.classList.toggle('hidden', !!cachedName);
+    commentComposerName.value = '';
+    commentComposerPriority.value = 'medium';
+    commentComposerBody.value = '';
+    commentComposerError.classList.add('hidden');
+    commentComposerModal.classList.remove('hidden');
+    setTimeout(() => (cachedName ? commentComposerBody : commentComposerName).focus(), 50);
+  }
+
+  function closeCommentComposer() {
+    commentComposerModal.classList.add('hidden');
+    pendingCommentPoint = null;
+  }
+
+  function showComposerError(message) {
+    commentComposerError.textContent = message;
+    commentComposerError.classList.remove('hidden');
+  }
+
+  commentComposerCancel.addEventListener('click', closeCommentComposer);
+  commentComposerModal.addEventListener('click', (e) => {
+    if (e.target === commentComposerModal) closeCommentComposer();
+  });
+
+  commentComposerSubmit.addEventListener('click', async () => {
+    if (!pendingCommentPoint) { closeCommentComposer(); return; }
+    const body = commentComposerBody.value.trim();
+    if (!body) { showComposerError('Comment text is required.'); return; }
+
+    const cachedName = getCachedCommenterName();
+    let authorName = cachedName;
+    if (!authorName) {
+      authorName = commentComposerName.value.trim();
+      if (!authorName) { showComposerError('Name is required.'); return; }
+    }
+
+    const priority = commentComposerPriority.value;
+    const point = pendingCommentPoint;
+
+    commentComposerSubmit.disabled = true;
+    commentComposerError.classList.add('hidden');
+    try {
+      const resolved = resolveEditPassphrase(diagramId);
+      const passphrase = resolved ? resolved.passphrase : '';
+      const created = await apiCreateComment(diagramId, {
+        x: point.x, y: point.y, priority, authorName, body,
+      }, passphrase);
+      if (!cachedName) setCachedCommenterName(authorName);
+      applyCommentUpdate(created);
+      closeCommentComposer();
+      renderComments();
+      renderDots();
+      showToast('Comment added.', 'success');
+    } catch (e) {
+      if (isAuthError(e)) {
+        showComposerError('Passphrase required — click "+ Comment" again to unlock.');
+      } else {
+        showComposerError(e.message);
+      }
+    } finally {
+      commentComposerSubmit.disabled = false;
+    }
+  });
+
+  // ── Dot markers ───────────────────────────────────────────────────────
+
+  function graphPointToLayerPoint(gx, gy) {
+    const layerRect = commentDotsLayer.getBoundingClientRect();
+    if (layerRect.width === 0 || layerRect.height === 0) return null;
+
+    if (currentMode === 'view' && embed && embed.graphToScreenPoint) {
+      const screen = embed.graphToScreenPoint(gx, gy);
+      if (!screen) return null;
+      return { x: screen.x - layerRect.left, y: screen.y - layerRect.top };
+    }
+    if (currentMode === 'edit' && embed && embed.getPageDimensions) {
+      const dims = embed.getPageDimensions();
+      if (!dims.width || !dims.height) return null;
+      return {
+        x: (gx / dims.width)  * layerRect.width,
+        y: (gy / dims.height) * layerRect.height,
+      };
+    }
+    return null;
+  }
+
+  function renderDots() {
+    commentDotsLayer.innerHTML = '';
+    if (!embed) return;
+    comments
+      .filter((c) => c.status !== 'resolved')
+      .forEach((c) => {
+        const pos = graphPointToLayerPoint(c.x, c.y);
+        if (!pos) return;
+        const dot = document.createElement('div');
+        dot.className = `comment-dot priority-${c.priority}`;
+        dot.style.left = `${pos.x}px`;
+        dot.style.top  = `${pos.y}px`;
+        dot.title = `${c.authorName}: ${c.body.slice(0, 80)}`;
+        dot.addEventListener('click', () => highlightCommentCard(c.id));
+        commentDotsLayer.appendChild(dot);
+      });
+  }
+
+  function highlightCommentCard(commentId) {
+    if (!commentsPanelVisible) setCommentsPanelVisible(true);
+    const card = commentsList.querySelector(`[data-comment-id="${commentId}"]`);
+    if (!card) return;
+    card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    card.classList.add('flash');
+    setTimeout(() => card.classList.remove('flash'), 1200);
+  }
+
+  window.addEventListener('resize', () => renderDots());
+
   // ── Bootstrap ────────────────────────────────────────────────────────────
 
   // Always start in view mode; the user can switch to edit via the button.
   initView();
+  loadComments();
 </script>
 </body>
 </html>

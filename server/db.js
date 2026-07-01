@@ -33,7 +33,7 @@ db.pragma('journal_mode = WAL');
 // We use a simple integer user_version pragma as a schema version counter.
 // Add new migration blocks below as the schema evolves; never change existing ones.
 
-const CURRENT_VERSION = 3;
+const CURRENT_VERSION = 4;
 const version = db.pragma('user_version', { simple: true });
 
 if (version < 1) {
@@ -68,6 +68,42 @@ if (version < 3) {
   db.exec(`ALTER TABLE diagrams ADD COLUMN passphrase TEXT`);
   db.pragma('user_version = 3');
   console.log('[db] Schema migrated to version 3');
+}
+
+if (version < 4) {
+  // Threaded comments anchored to a point on a diagram.
+  // status: 'open' | 'resolved'. priority: 'low' | 'medium' | 'high'.
+  // x/y are graph-model coordinates (View mode) or a best-effort
+  // page-fraction-derived approximation (Edit mode) — see app.js for the
+  // coordinate math used when placing/rendering pins.
+  // No SQLite foreign keys are declared (this codebase does not enable
+  // `PRAGMA foreign_keys`); deletes are cascaded manually in server.js.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS comments (
+      id          TEXT    PRIMARY KEY,
+      diagram_id  TEXT    NOT NULL,
+      x           REAL    NOT NULL,
+      y           REAL    NOT NULL,
+      priority    TEXT    NOT NULL DEFAULT 'medium',
+      status      TEXT    NOT NULL DEFAULT 'open',
+      author_name TEXT    NOT NULL,
+      body        TEXT    NOT NULL,
+      created_at  INTEGER NOT NULL,
+      resolved_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_comments_diagram_id ON comments(diagram_id);
+
+    CREATE TABLE IF NOT EXISTS comment_replies (
+      id          TEXT    PRIMARY KEY,
+      comment_id  TEXT    NOT NULL,
+      author_name TEXT    NOT NULL,
+      body        TEXT    NOT NULL,
+      created_at  INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_comment_replies_comment_id ON comment_replies(comment_id);
+  `);
+  db.pragma('user_version = 4');
+  console.log('[db] Schema migrated to version 4');
 }
 
 console.log(`[db] Database ready at ${DB_PATH}`);

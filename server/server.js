@@ -9,6 +9,11 @@
  *   PUT    /api/diagrams/:id      — update diagram XML      (passphrase required)
  *   PUT    /api/diagrams/:id/passphrase — set/clear a diagram's own passphrase (master passphrase required)
  *   GET    /api/diagrams/:id/meta — lightweight poll route  (public)
+ *   GET    /api/diagrams/:id/comments               — list comment threads (public)
+ *   POST   /api/diagrams/:id/comments               — create a comment thread (passphrase required)
+ *   POST   /api/diagrams/:id/comments/:cid/replies  — reply to a thread (passphrase required)
+ *   PATCH  /api/diagrams/:id/comments/:cid          — update priority (passphrase required)
+ *   PATCH  /api/diagrams/:id/comments/:cid/resolve  — resolve/reopen (MASTER passphrase required)
  *   GET    /healthz               — Docker healthcheck
  *
  * Static files in ../public/ are served at the root path.
@@ -353,6 +358,15 @@ app.delete('/api/diagrams/:id', requirePassphrase, (req, res) => {
     return res.status(404).json({ error: 'Diagram not found.' });
   }
 
+  // No SQLite foreign keys are declared, so cascade-delete comments/replies
+  // manually to avoid leaving orphaned rows behind.
+  const commentIds = db.prepare('SELECT id FROM comments WHERE diagram_id = ?').all(id).map(r => r.id);
+  if (commentIds.length > 0) {
+    const placeholders = commentIds.map(() => '?').join(',');
+    db.prepare(`DELETE FROM comment_replies WHERE comment_id IN (${placeholders})`).run(...commentIds);
+  }
+  db.prepare('DELETE FROM comments WHERE diagram_id = ?').run(id);
+
   db.prepare('DELETE FROM diagrams WHERE id = ?').run(id);
   return res.status(204).send();
 });
@@ -387,6 +401,201 @@ app.get('/api/diagrams/:id/meta', (req, res) => {
     return res.status(404).json({ error: 'Diagram not found.' });
   }
   return res.json({ updatedAt: row.updatedAt });
+});
+
+// ---------------------------------------------------------------------------
+// Comments — threaded, point-anchored comments on a diagram.
+//
+// Permission model:
+//   - Reading comments is public (no passphrase) so anyone with the diagram
+//     link can see the discussion, matching View mode's public XML access.
+//   - Creating a comment/reply and changing priority require
+//     diagramPassphraseValid() — the shared/master passphrase OR that
+//     diagram's own passphrase, same gate used for editing the diagram.
+//   - Resolving/reopening a thread requires the MASTER/shared passphrase
+//     specifically (requirePassphrase), per the "need to be logged in as
+//     the admin to resolve" requirement — a diagram-specific passphrase is
+//     NOT sufficient for this action.
+// ---------------------------------------------------------------------------
+
+const VALID_PRIORITIES = ['low', 'medium', 'high'];
+
+function getDiagramRow(id) {
+  return db.prepare('SELECT * FROM diagrams WHERE id = ?').get(id);
+}
+
+function serializeComment(row, replies) {
+  return {
+    id:         row.id,
+    diagramId:  row.diagram_id,
+    x:          row.x,
+    y:          row.y,
+    priority:   row.priority,
+    status:     row.status,
+    authorName: row.author_name,
+    body:       row.body,
+    createdAt:  row.created_at,
+    resolvedAt: row.resolved_at,
+    replies: replies.map(r => ({
+      id:         r.id,
+      authorName: r.author_name,
+      body:       r.body,
+      createdAt:  r.created_at,
+    })),
+  };
+}
+
+function validateAuthorAndBody(body) {
+  const { authorName, body: text } = body;
+  if (!authorName || typeof authorName !== 'string' || authorName.trim().length === 0) {
+    return 'authorName is required.';
+  }
+  if (authorName.trim().length > 60) {
+    return 'authorName must be 60 characters or fewer.';
+  }
+  if (!text || typeof text !== 'string' || text.trim().length === 0) {
+    return 'body is required.';
+  }
+  if (text.trim().length > 4000) {
+    return 'body must be 4000 characters or fewer.';
+  }
+  return null;
+}
+
+// GET /api/diagrams/:id/comments — list all threads + replies (public)
+app.get('/api/diagrams/:id/comments', (req, res) => {
+  const { id } = req.params;
+  const diagram = getDiagramRow(id);
+  if (!diagram) {
+    return res.status(404).json({ error: 'Diagram not found.' });
+  }
+
+  const comments = db.prepare(
+    'SELECT * FROM comments WHERE diagram_id = ? ORDER BY created_at ASC'
+  ).all(id);
+  const replyStmt = db.prepare(
+    'SELECT * FROM comment_replies WHERE comment_id = ? ORDER BY created_at ASC'
+  );
+
+  return res.json(comments.map(c => serializeComment(c, replyStmt.all(c.id))));
+});
+
+// POST /api/diagrams/:id/comments — create a new thread (diagram passphrase gate)
+app.post('/api/diagrams/:id/comments', (req, res) => {
+  const { id } = req.params;
+  const diagram = getDiagramRow(id);
+  if (!diagram) {
+    return res.status(404).json({ error: 'Diagram not found.' });
+  }
+  if (!diagramPassphraseValid(diagram, req.headers['x-edit-passphrase'] || '')) {
+    return res.status(401).json({ error: 'Invalid or missing passphrase.' });
+  }
+
+  const { x, y, priority } = req.body;
+  if (typeof x !== 'number' || typeof y !== 'number' || !Number.isFinite(x) || !Number.isFinite(y)) {
+    return res.status(400).json({ error: 'x and y must be numbers.' });
+  }
+  const cleanPriority = VALID_PRIORITIES.includes(priority) ? priority : 'medium';
+  const validationError = validateAuthorAndBody(req.body);
+  if (validationError) {
+    return res.status(400).json({ error: validationError });
+  }
+
+  const commentId = generateId();
+  const now = Date.now();
+  db.prepare(`
+    INSERT INTO comments (id, diagram_id, x, y, priority, status, author_name, body, created_at, resolved_at)
+    VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, NULL)
+  `).run(commentId, id, x, y, cleanPriority, req.body.authorName.trim(), req.body.body.trim(), now);
+
+  const row = db.prepare('SELECT * FROM comments WHERE id = ?').get(commentId);
+  return res.status(201).json(serializeComment(row, []));
+});
+
+// POST /api/diagrams/:id/comments/:commentId/replies — reply to a thread (diagram passphrase gate)
+app.post('/api/diagrams/:id/comments/:commentId/replies', (req, res) => {
+  const { id, commentId } = req.params;
+  const diagram = getDiagramRow(id);
+  if (!diagram) {
+    return res.status(404).json({ error: 'Diagram not found.' });
+  }
+  if (!diagramPassphraseValid(diagram, req.headers['x-edit-passphrase'] || '')) {
+    return res.status(401).json({ error: 'Invalid or missing passphrase.' });
+  }
+
+  const comment = db.prepare('SELECT * FROM comments WHERE id = ? AND diagram_id = ?').get(commentId, id);
+  if (!comment) {
+    return res.status(404).json({ error: 'Comment thread not found.' });
+  }
+
+  const validationError = validateAuthorAndBody(req.body);
+  if (validationError) {
+    return res.status(400).json({ error: validationError });
+  }
+
+  const replyId = generateId();
+  const now = Date.now();
+  db.prepare(`
+    INSERT INTO comment_replies (id, comment_id, author_name, body, created_at)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(replyId, commentId, req.body.authorName.trim(), req.body.body.trim(), now);
+
+  const replies = db.prepare('SELECT * FROM comment_replies WHERE comment_id = ? ORDER BY created_at ASC').all(commentId);
+  return res.status(201).json(serializeComment(comment, replies));
+});
+
+// PATCH /api/diagrams/:id/comments/:commentId — update priority (diagram passphrase gate)
+app.patch('/api/diagrams/:id/comments/:commentId', (req, res) => {
+  const { id, commentId } = req.params;
+  const diagram = getDiagramRow(id);
+  if (!diagram) {
+    return res.status(404).json({ error: 'Diagram not found.' });
+  }
+  if (!diagramPassphraseValid(diagram, req.headers['x-edit-passphrase'] || '')) {
+    return res.status(401).json({ error: 'Invalid or missing passphrase.' });
+  }
+
+  const comment = db.prepare('SELECT * FROM comments WHERE id = ? AND diagram_id = ?').get(commentId, id);
+  if (!comment) {
+    return res.status(404).json({ error: 'Comment thread not found.' });
+  }
+
+  const { priority } = req.body;
+  if (!VALID_PRIORITIES.includes(priority)) {
+    return res.status(400).json({ error: `priority must be one of: ${VALID_PRIORITIES.join(', ')}.` });
+  }
+
+  db.prepare('UPDATE comments SET priority = ? WHERE id = ?').run(priority, commentId);
+  const replies = db.prepare('SELECT * FROM comment_replies WHERE comment_id = ? ORDER BY created_at ASC').all(commentId);
+  const updated = db.prepare('SELECT * FROM comments WHERE id = ?').get(commentId);
+  return res.json(serializeComment(updated, replies));
+});
+
+// PATCH /api/diagrams/:id/comments/:commentId/resolve — resolve/reopen (MASTER passphrase only)
+app.patch('/api/diagrams/:id/comments/:commentId/resolve', requirePassphrase, (req, res) => {
+  const { id, commentId } = req.params;
+  const diagram = getDiagramRow(id);
+  if (!diagram) {
+    return res.status(404).json({ error: 'Diagram not found.' });
+  }
+
+  const comment = db.prepare('SELECT * FROM comments WHERE id = ? AND diagram_id = ?').get(commentId, id);
+  if (!comment) {
+    return res.status(404).json({ error: 'Comment thread not found.' });
+  }
+
+  const { resolved } = req.body;
+  if (typeof resolved !== 'boolean') {
+    return res.status(400).json({ error: 'resolved must be a boolean.' });
+  }
+
+  const status = resolved ? 'resolved' : 'open';
+  const resolvedAt = resolved ? Date.now() : null;
+  db.prepare('UPDATE comments SET status = ?, resolved_at = ? WHERE id = ?').run(status, resolvedAt, commentId);
+
+  const replies = db.prepare('SELECT * FROM comment_replies WHERE comment_id = ? ORDER BY created_at ASC').all(commentId);
+  const updated = db.prepare('SELECT * FROM comments WHERE id = ?').get(commentId);
+  return res.json(serializeComment(updated, replies));
 });
 
 // ---------------------------------------------------------------------------

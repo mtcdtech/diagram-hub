@@ -89,6 +89,23 @@ function clearCachedDiagramPassphrase(diagramId) {
   sessionStorage.removeItem(diagramPassphraseKey(diagramId));
 }
 
+// A commenter is asked for their name once per browser session (sessionStorage,
+// same lifetime as the passphrase caches above), then it's reused automatically
+// for every subsequent comment/reply they post in that session — no re-prompting.
+const COMMENTER_NAME_KEY = 'dh_commenter_name';
+
+function getCachedCommenterName() {
+  return sessionStorage.getItem(COMMENTER_NAME_KEY) || '';
+}
+
+function setCachedCommenterName(value) {
+  sessionStorage.setItem(COMMENTER_NAME_KEY, value);
+}
+
+function clearCachedCommenterName() {
+  sessionStorage.removeItem(COMMENTER_NAME_KEY);
+}
+
 // ── Runtime config ───────────────────────────────────────────────────────────
 
 /**
@@ -307,6 +324,33 @@ class DiagramEmbed {
     this._titleCache = data.title;
     this._sendLoad();
   }
+
+  /**
+   * Best-effort page size, parsed from the diagram's mxGraphModel root XML
+   * attributes (e.g. `pageWidth="850" pageHeight="1100"`).
+   *
+   * Used as the coordinate basis for placing/rendering comment pins while
+   * editing: the draw.io Embed Mode postMessage protocol does not expose
+   * the editor's live pan/zoom state or canvas coordinate space, so pin
+   * placement inside the iframe maps a click's fractional position within
+   * the iframe's bounding box onto this page-size rectangle, assuming the
+   * editor is showing the page at its default "fit page" position. This is
+   * an approximation — it will be off if the user has panned/zoomed inside
+   * the editor before placing a pin — unlike View mode, which computes an
+   * exact graph-coordinate transform from the live mxGraph view.
+   *
+   * Falls back to the standard page size used by the server's blank-diagram
+   * template (850×1100) if the attributes are missing or unparseable.
+   */
+  getPageDimensions() {
+    const xml = this._xmlCache || '';
+    const w = xml.match(/\bpageWidth="([\d.]+)"/);
+    const h = xml.match(/\bpageHeight="([\d.]+)"/);
+    return {
+      width:  w ? parseFloat(w[1]) : 850,
+      height: h ? parseFloat(h[1]) : 1100,
+    };
+  }
 }
 
 // ── draw.io static GraphViewer controller (read-only, interactive) ──────────
@@ -331,6 +375,12 @@ class DiagramViewer {
     this.onReady   = opts.onReady || (() => {});
     this._base     = null;
     this._mxDiv    = null;
+    // Set once the underlying GraphViewer has rendered (see _ensureViewerScript).
+    // `graph` is the live mxGraph/Graph instance — its `view.scale` and
+    // `view.translate` give an exact screen↔graph-model coordinate transform,
+    // used for placing/rendering comment pins precisely across zoom/pan.
+    this._viewer   = null;
+    this.graph     = null;
   }
 
   /**
@@ -388,15 +438,26 @@ class DiagramViewer {
    */
   _ensureViewerScript() {
     return new Promise((resolve) => {
+      // We deliberately call GraphViewer.createViewerForElement(el, callback)
+      // directly instead of GraphViewer.processElements() (which does the
+      // same thing internally but without a callback) so we can capture a
+      // reference to the created GraphViewer instance and its live `.graph`
+      // (mxGraph) object — needed for exact coordinate math. This still
+      // works with data-mxgraph markup exactly like processElements does.
+      const createForThisElement = () => {
+        window.GraphViewer.createViewerForElement(this._mxDiv, (viewer) => {
+          this._viewer = viewer;
+          this.graph   = viewer.graph;
+          resolve();
+        });
+      };
       if (window.GraphViewer) {
-        window.GraphViewer.processElements();
-        resolve();
+        createForThisElement();
         return;
       }
       // onDrawioViewerLoad is the documented hook the script calls once ready.
       window.onDrawioViewerLoad = () => {
-        window.GraphViewer.processElements();
-        resolve();
+        createForThisElement();
       };
       if (document.getElementById('drawio-viewer-script')) {
         // Script tag already injected by a previous instance; the handler
@@ -418,14 +479,70 @@ class DiagramViewer {
     const data = await this._fetchXml();
     this._render(data);
     if (window.GraphViewer) {
-      window.GraphViewer.processElements();
+      window.GraphViewer.createViewerForElement(this._mxDiv, (viewer) => {
+        this._viewer = viewer;
+        this.graph   = viewer.graph;
+      });
     }
   }
 
   /** Clear the container (cleanup when switching to edit mode). */
   destroy() {
     this.container.innerHTML = '';
-    this._mxDiv = null;
+    this._mxDiv  = null;
+    this._viewer = null;
+    this.graph   = null;
+  }
+
+  /**
+   * Convert a viewport point (e.g. a MouseEvent's clientX/clientY) into a
+   * graph-model coordinate, using the live mxGraph view's scale/translate.
+   * Returns null if the graph hasn't finished rendering yet.
+   */
+  screenToGraphPoint(clientX, clientY) {
+    if (!this.graph || !this.graph.view || !this.graph.container) return null;
+    const rect      = this.graph.container.getBoundingClientRect();
+    const scale     = this.graph.view.scale;
+    const translate = this.graph.view.translate;
+    return {
+      x: (clientX - rect.left) / scale - translate.x,
+      y: (clientY - rect.top)  / scale - translate.y,
+    };
+  }
+
+  /**
+   * Convert a graph-model coordinate to a viewport point (clientX/clientY
+   * space) — the inverse of screenToGraphPoint. Returns null if not rendered.
+   */
+  graphToScreenPoint(graphX, graphY) {
+    if (!this.graph || !this.graph.view || !this.graph.container) return null;
+    const rect      = this.graph.container.getBoundingClientRect();
+    const scale     = this.graph.view.scale;
+    const translate = this.graph.view.translate;
+    return {
+      x: rect.left + (graphX + translate.x) * scale,
+      y: rect.top  + (graphY + translate.y) * scale,
+    };
+  }
+
+  /**
+   * GraphViewer doesn't expose a documented pan/zoom change event, so this
+   * polls the view's scale/translate at a short interval and invokes
+   * onChange() whenever they differ from the container's current size or
+   * the last observed values — letting callers reposition overlaid comment
+   * pins in step with user panning/zooming. Returns a stop() function.
+   */
+  watchViewChanges(onChange, intervalMs = 150) {
+    let last = null;
+    const tick = () => {
+      if (!this.graph || !this.graph.view) return;
+      const { scale, translate } = this.graph.view;
+      const key = `${scale}|${translate.x}|${translate.y}`;
+      if (last !== null && key !== last) onChange();
+      last = key;
+    };
+    const handle = setInterval(tick, intervalMs);
+    return () => clearInterval(handle);
   }
 }
 
@@ -569,6 +686,122 @@ async function apiSetDiagramPassphrase(id, passphrase, masterPassphrase) {
       'X-Edit-Passphrase': masterPassphrase,
     },
     body: JSON.stringify({ passphrase }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+// ---------------------------------------------------------------------------
+// Comments API — threaded, point-anchored comments on a diagram.
+// Reading is public; creating/replying/priority-change require the shared
+// or diagram-specific passphrase; resolving requires the MASTER passphrase.
+// ---------------------------------------------------------------------------
+
+/**
+ * GET /api/diagrams/:id/comments — list all comment threads (public).
+ * @param {string} diagramId
+ * @returns {Promise<Array<Object>>}
+ */
+async function apiListComments(diagramId) {
+  const res = await fetch(`/api/diagrams/${diagramId}/comments`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+/**
+ * POST /api/diagrams/:id/comments — create a new comment thread.
+ * @param {string} diagramId
+ * @param {{x:number, y:number, priority:string, authorName:string, body:string}} data
+ * @param {string} passphrase
+ * @returns {Promise<Object>}
+ */
+async function apiCreateComment(diagramId, data, passphrase) {
+  const res = await fetch(`/api/diagrams/${diagramId}/comments`, {
+    method:  'POST',
+    headers: {
+      'Content-Type':      'application/json',
+      'X-Edit-Passphrase': passphrase,
+    },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+/**
+ * POST /api/diagrams/:id/comments/:commentId/replies — reply to a thread.
+ * @param {string} diagramId
+ * @param {string} commentId
+ * @param {{authorName:string, body:string}} data
+ * @param {string} passphrase
+ * @returns {Promise<Object>}
+ */
+async function apiReplyComment(diagramId, commentId, data, passphrase) {
+  const res = await fetch(`/api/diagrams/${diagramId}/comments/${commentId}/replies`, {
+    method:  'POST',
+    headers: {
+      'Content-Type':      'application/json',
+      'X-Edit-Passphrase': passphrase,
+    },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+/**
+ * PATCH /api/diagrams/:id/comments/:commentId — change a thread's priority.
+ * @param {string} diagramId
+ * @param {string} commentId
+ * @param {string} priority  'low' | 'medium' | 'high'
+ * @param {string} passphrase
+ * @returns {Promise<Object>}
+ */
+async function apiUpdateCommentPriority(diagramId, commentId, priority, passphrase) {
+  const res = await fetch(`/api/diagrams/${diagramId}/comments/${commentId}`, {
+    method:  'PATCH',
+    headers: {
+      'Content-Type':      'application/json',
+      'X-Edit-Passphrase': passphrase,
+    },
+    body: JSON.stringify({ priority }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+/**
+ * PATCH /api/diagrams/:id/comments/:commentId/resolve — resolve or reopen a
+ * thread. Requires the MASTER/shared passphrase (admin-only action).
+ * @param {string} diagramId
+ * @param {string} commentId
+ * @param {boolean} resolved
+ * @param {string} passphrase
+ * @returns {Promise<Object>}
+ */
+async function apiResolveComment(diagramId, commentId, resolved, passphrase) {
+  const res = await fetch(`/api/diagrams/${diagramId}/comments/${commentId}/resolve`, {
+    method:  'PATCH',
+    headers: {
+      'Content-Type':      'application/json',
+      'X-Edit-Passphrase': passphrase,
+    },
+    body: JSON.stringify({ resolved }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
