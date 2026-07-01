@@ -7,6 +7,7 @@
  *   GET    /api/diagrams/:id      — fetch diagram XML       (public for view mode;
  *                                   passphrase required for ?mode=edit)
  *   PUT    /api/diagrams/:id      — update diagram XML      (passphrase required)
+ *   PUT    /api/diagrams/:id/passphrase — set/clear a diagram's own passphrase (master passphrase required)
  *   GET    /api/diagrams/:id/meta — lightweight poll route  (public)
  *   GET    /healthz               — Docker healthcheck
  *
@@ -99,6 +100,29 @@ function requirePassphrase(req, res, next) {
     return res.status(401).json({ error: 'Invalid or missing passphrase.' });
   }
   next();
+}
+
+/**
+ * A diagram can optionally have its own passphrase (set from the hub
+ * dashboard), granting edit access to just that diagram without needing the
+ * shared/master passphrase. The shared passphrase always continues to work
+ * everywhere, including on diagrams that have their own passphrase set, so
+ * it still acts as a master key.
+ *
+ * @param {{passphrase: string|null}} row  — a row from the diagrams table
+ * @param {string} provided
+ */
+function diagramPassphraseValid(row, provided) {
+  // Master/shared passphrase always grants access.
+  if (passphraseValid(provided)) return true;
+
+  // Otherwise, fall back to the diagram's own passphrase, if it has one.
+  if (!row || !row.passphrase) return false;
+  if (typeof provided !== 'string' || provided.length === 0) return false;
+
+  const hashExpected = crypto.createHash('sha256').update(row.passphrase).digest();
+  const hashProvided = crypto.createHash('sha256').update(provided).digest();
+  return crypto.timingSafeEqual(hashExpected, hashProvided);
 }
 
 /**
@@ -208,9 +232,12 @@ app.post('/api/diagrams', requirePassphrase, (req, res) => {
 
 app.get('/api/diagrams', requirePassphrase, (_req, res) => {
   const rows = db.prepare(
-    'SELECT id, title, updated_at AS updatedAt FROM diagrams ORDER BY updated_at DESC'
+    'SELECT id, title, updated_at AS updatedAt, passphrase FROM diagrams ORDER BY updated_at DESC'
   ).all();
-  return res.json(rows);
+  return res.json(rows.map(({ passphrase, ...rest }) => ({
+    ...rest,
+    hasPassphrase: !!passphrase,
+  })));
 });
 
 // ---------------------------------------------------------------------------
@@ -225,16 +252,17 @@ app.get('/api/diagrams/:id', (req, res) => {
   const { id } = req.params;
   const mode   = req.query.mode || 'view';
 
-  if (mode === 'edit') {
-    // Edit mode: passphrase gate.
-    if (!passphraseValid(req.headers['x-edit-passphrase'] || '')) {
-      return res.status(401).json({ error: 'Invalid or missing passphrase.' });
-    }
-  }
-
   const row = db.prepare('SELECT * FROM diagrams WHERE id = ?').get(id);
   if (!row) {
     return res.status(404).json({ error: 'Diagram not found.' });
+  }
+
+  if (mode === 'edit') {
+    // Edit mode: passphrase gate. The shared/master passphrase always works;
+    // a diagram's own passphrase (if set) also grants access to it alone.
+    if (!diagramPassphraseValid(row, req.headers['x-edit-passphrase'] || '')) {
+      return res.status(401).json({ error: 'Invalid or missing passphrase.' });
+    }
   }
 
   const xml = mode === 'view' ? applyViewLock(row.xml) : row.xml;
@@ -251,7 +279,7 @@ app.get('/api/diagrams/:id', (req, res) => {
 // PUT /api/diagrams/:id — update a diagram's XML (passphrase required)
 // ---------------------------------------------------------------------------
 
-app.put('/api/diagrams/:id', requirePassphrase, (req, res) => {
+app.put('/api/diagrams/:id', (req, res) => {
   const { id }    = req.params;
   const { xml, title } = req.body;
 
@@ -259,9 +287,15 @@ app.put('/api/diagrams/:id', requirePassphrase, (req, res) => {
     return res.status(400).json({ error: 'xml is required in request body.' });
   }
 
-  const row = db.prepare('SELECT id FROM diagrams WHERE id = ?').get(id);
+  const row = db.prepare('SELECT * FROM diagrams WHERE id = ?').get(id);
   if (!row) {
     return res.status(404).json({ error: 'Diagram not found.' });
+  }
+
+  // Shared/master passphrase always works; a diagram's own passphrase (if
+  // set) also grants access to save just that diagram.
+  if (!diagramPassphraseValid(row, req.headers['x-edit-passphrase'] || '')) {
+    return res.status(401).json({ error: 'Invalid or missing passphrase.' });
   }
 
   const now = Date.now();
@@ -275,6 +309,36 @@ app.put('/api/diagrams/:id', requirePassphrase, (req, res) => {
   }
 
   return res.json({ updatedAt: now });
+});
+
+// ---------------------------------------------------------------------------
+// PUT /api/diagrams/:id/passphrase — set, change, or clear a diagram's own
+// passphrase. Gated by the shared/master passphrase only, since this is
+// meant to be managed from the hub dashboard (which already requires the
+// master passphrase to view). Body: { passphrase: string|null }.
+// A null/absent passphrase clears the diagram's individual passphrase,
+// leaving it protected only by the shared passphrase.
+// ---------------------------------------------------------------------------
+
+app.put('/api/diagrams/:id/passphrase', requirePassphrase, (req, res) => {
+  const { id } = req.params;
+  const { passphrase } = req.body;
+
+  const row = db.prepare('SELECT id FROM diagrams WHERE id = ?').get(id);
+  if (!row) {
+    return res.status(404).json({ error: 'Diagram not found.' });
+  }
+
+  let valueToStore = null;
+  if (passphrase !== null && passphrase !== undefined) {
+    if (typeof passphrase !== 'string' || passphrase.length < 4) {
+      return res.status(400).json({ error: 'Passphrase must be at least 4 characters, or null to clear it.' });
+    }
+    valueToStore = passphrase;
+  }
+
+  db.prepare('UPDATE diagrams SET passphrase = ? WHERE id = ?').run(valueToStore, id);
+  return res.json({ ok: true, hasPassphrase: !!valueToStore });
 });
 
 // ---------------------------------------------------------------------------

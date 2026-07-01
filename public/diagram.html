@@ -165,7 +165,20 @@
     beginPolling();
   }
 
-  async function initEdit(passphrase) {
+  // Resolve which passphrase to use for editing this diagram: prefer a
+  // per-diagram passphrase (if one has been entered and cached for this
+  // diagram in this browser session), then fall back to the shared/master
+  // passphrase cached at the hub level. Returns { passphrase, source } where
+  // source is 'diagram' or 'shared', or null if neither is cached.
+  function resolveEditPassphrase(id) {
+    const diagramPass = getCachedDiagramPassphrase(id);
+    if (diagramPass) return { passphrase: diagramPass, source: 'diagram' };
+    const sharedPass = getCachedPassphrase();
+    if (sharedPass) return { passphrase: sharedPass, source: 'shared' };
+    return null;
+  }
+
+  async function initEdit(passphrase, source = 'shared') {
     currentMode = 'edit';
     modeBadge.textContent = 'EDIT';
     modeBadge.classList.add('edit');
@@ -193,8 +206,14 @@
     } catch (e) {
       if (e.message.includes('401')) {
         showToast('Passphrase rejected by server.', 'error');
-        // Fall back to view mode and clear cached passphrase.
-        clearCachedPassphrase();
+        // Fall back to view mode and clear only the cache the rejected
+        // passphrase actually came from, so a valid credential of the
+        // other kind (diagram-specific vs. shared) is left untouched.
+        if (source === 'diagram') {
+          clearCachedDiagramPassphrase(diagramId);
+        } else {
+          clearCachedPassphrase();
+        }
         await initView();
         return;
       }
@@ -280,9 +299,9 @@
       return;
     }
 
-    const cached = getCachedPassphrase();
-    if (cached) {
-      await initEdit(cached);
+    const resolved = resolveEditPassphrase(diagramId);
+    if (resolved) {
+      await initEdit(resolved.passphrase, resolved.source);
     } else {
       openPassphraseModal();
     }
@@ -335,10 +354,13 @@
         modalPassphrase.select();
         return;
       }
-      // Passphrase accepted.
-      setCachedPassphrase(passphrase);
+      // Passphrase accepted. Cache it under the per-diagram key (not the
+      // global shared-passphrase key) so it never overwrites/pollutes the
+      // hub-level session credential — this may just be this diagram's own
+      // passphrase, not the shared one.
+      setCachedDiagramPassphrase(diagramId, passphrase);
       closePassphraseModal();
-      await initEdit(passphrase);
+      await initEdit(passphrase, 'diagram');
     } catch (e) {
       showToast(`Network error: ${e.message}`, 'error');
     } finally {

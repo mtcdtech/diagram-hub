@@ -69,6 +69,26 @@ function clearCachedPassphrase() {
   sessionStorage.removeItem(PASSPHRASE_KEY);
 }
 
+// A diagram can optionally have its own passphrase. This is cached under a
+// SEPARATE per-diagram sessionStorage key so entering it never clobbers (or
+// gets clobbered by) the shared/master passphrase cached above under
+// PASSPHRASE_KEY, which the hub dashboard relies on.
+function diagramPassphraseKey(diagramId) {
+  return `dh_diagram_passphrase_${diagramId}`;
+}
+
+function getCachedDiagramPassphrase(diagramId) {
+  return sessionStorage.getItem(diagramPassphraseKey(diagramId)) || '';
+}
+
+function setCachedDiagramPassphrase(diagramId, value) {
+  sessionStorage.setItem(diagramPassphraseKey(diagramId), value);
+}
+
+function clearCachedDiagramPassphrase(diagramId) {
+  sessionStorage.removeItem(diagramPassphraseKey(diagramId));
+}
+
 // ── Runtime config ───────────────────────────────────────────────────────────
 
 /**
@@ -524,6 +544,31 @@ async function apiChangePassphrase(currentPassphrase, newPassphrase) {
       'X-Edit-Passphrase': currentPassphrase,
     },
     body: JSON.stringify({ newPassphrase }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+/**
+ * PUT /api/diagrams/:id/passphrase — set, change, or clear a diagram's own
+ * passphrase. Always gated by the shared/master passphrase (this is only
+ * ever called from the hub dashboard, which already requires it).
+ * @param {string} id
+ * @param {string|null} passphrase  New passphrase, or null to clear it.
+ * @param {string} masterPassphrase
+ * @returns {Promise<{ok:true, hasPassphrase:boolean}>}
+ */
+async function apiSetDiagramPassphrase(id, passphrase, masterPassphrase) {
+  const res = await fetch(`/api/diagrams/${id}/passphrase`, {
+    method:  'PUT',
+    headers: {
+      'Content-Type':      'application/json',
+      'X-Edit-Passphrase': masterPassphrase,
+    },
+    body: JSON.stringify({ passphrase }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));

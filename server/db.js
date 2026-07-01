@@ -33,7 +33,7 @@ db.pragma('journal_mode = WAL');
 // We use a simple integer user_version pragma as a schema version counter.
 // Add new migration blocks below as the schema evolves; never change existing ones.
 
-const CURRENT_VERSION = 2;
+const CURRENT_VERSION = 3;
 const version = db.pragma('user_version', { simple: true });
 
 if (version < 1) {
@@ -58,6 +58,16 @@ if (version < 2) {
   `);
   db.pragma('user_version = 2');
   console.log('[db] Schema migrated to version 2');
+}
+
+if (version < 3) {
+  // Optional per-diagram passphrase. NULL means "no individual passphrase
+  // set" — the diagram is protected only by the shared/master passphrase.
+  // When set, it grants edit access to that diagram alone; the shared
+  // passphrase always continues to work everywhere as a master key.
+  db.exec(`ALTER TABLE diagrams ADD COLUMN passphrase TEXT`);
+  db.pragma('user_version = 3');
+  console.log('[db] Schema migrated to version 3');
 }
 
 console.log(`[db] Database ready at ${DB_PATH}`);
