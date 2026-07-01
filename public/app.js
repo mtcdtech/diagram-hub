@@ -348,6 +348,13 @@ class DiagramViewer {
       nav:       true,
       resize:    true,
       toolbar:   'zoom layers lightbox',
+      // Disable GraphViewer's default "single click opens fullscreen lightbox"
+      // behavior. Without this, clicking the canvas (e.g. to interact with the
+      // hover toolbar/layers panel) instead popped open the lightbox overlay,
+      // making the inline layers toggle hard to discover/use. The explicit
+      // "lightbox" toolbar button above still lets users open fullscreen
+      // deliberately.
+      lightbox:  false,
       xml:       data.xml,
     });
     this.container.appendChild(div);
@@ -477,6 +484,46 @@ async function apiCreateDiagram(title, passphrase) {
 async function apiListDiagrams(passphrase) {
   const res = await fetch('/api/diagrams', {
     headers: { 'X-Edit-Passphrase': passphrase },
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+/**
+ * DELETE /api/diagrams/:id — permanently delete a diagram.
+ * @param {string} id
+ * @param {string} passphrase
+ * @returns {Promise<true>}
+ */
+async function apiDeleteDiagram(id, passphrase) {
+  const res = await fetch(`/api/diagrams/${id}`, {
+    method:  'DELETE',
+    headers: { 'X-Edit-Passphrase': passphrase },
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return true;
+}
+
+/**
+ * POST /api/admin/change-passphrase — change the shared edit passphrase.
+ * @param {string} currentPassphrase
+ * @param {string} newPassphrase
+ * @returns {Promise<{ok:true}>}
+ */
+async function apiChangePassphrase(currentPassphrase, newPassphrase) {
+  const res = await fetch('/api/admin/change-passphrase', {
+    method:  'POST',
+    headers: {
+      'Content-Type':      'application/json',
+      'X-Edit-Passphrase': currentPassphrase,
+    },
+    body: JSON.stringify({ newPassphrase }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));

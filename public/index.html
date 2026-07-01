@@ -47,6 +47,7 @@
         <h1>Diagram Hub</h1>
         <p class="subtitle">Your diagrams</p>
       </div>
+      <button id="admin-btn" class="btn btn-secondary btn-sm">Admin</button>
       <button id="logout-btn" class="btn btn-secondary btn-sm">Lock</button>
     </div>
 
@@ -71,6 +72,36 @@
   </div>
 
 </div><!-- /#app -->
+
+<!-- ── Admin modal (change edit passphrase) ─────────────────────────────── -->
+<div class="modal-overlay hidden" id="admin-modal">
+  <div class="modal">
+    <h3>Change edit passphrase</h3>
+    <p>
+      This changes the shared passphrase required to view the diagram list,
+      create diagrams, and edit diagrams. Diagram view links will keep working.
+    </p>
+    <div class="auth-form" style="flex-direction:column; align-items:stretch;">
+      <input
+        id="admin-new-passphrase"
+        type="password"
+        placeholder="New passphrase (min. 8 characters)…"
+        autocomplete="new-password"
+      />
+      <input
+        id="admin-confirm-passphrase"
+        type="password"
+        placeholder="Confirm new passphrase…"
+        autocomplete="new-password"
+      />
+    </div>
+    <span id="admin-modal-error" class="auth-error hidden"></span>
+    <div class="modal-actions">
+      <button id="admin-modal-cancel" class="btn btn-secondary btn-sm">Cancel</button>
+      <button id="admin-modal-submit" class="btn btn-primary btn-sm">Update Passphrase</button>
+    </div>
+  </div>
+</div>
 
 <!-- Toast container (injected by app.js if needed) -->
 <div id="toast-container"></div>
@@ -162,6 +193,11 @@
             class="btn btn-secondary btn-sm"
             data-id="${escHtml(d.id)}"
             data-action="copy-link">Share</button>
+          <button
+            class="btn btn-danger btn-sm"
+            data-id="${escHtml(d.id)}"
+            data-title="${escHtml(d.title)}"
+            data-action="delete">Delete</button>
         </div>`;
       diagramList.appendChild(li);
     }
@@ -182,6 +218,24 @@
       navigator.clipboard.writeText(url)
         .then(() => showToast('Link copied to clipboard', 'success'))
         .catch(() => showToast(`Share URL: ${url}`, 'info', 6000));
+    } else if (action === 'delete') {
+      const title = btn.dataset.title || 'this diagram';
+      if (!confirm(`Delete "${title}"? This cannot be undone.`)) return;
+      btn.disabled = true;
+      apiDeleteDiagram(id, getCachedPassphrase())
+        .then(() => {
+          showToast('Diagram deleted', 'success');
+          const li = btn.closest('.diagram-list-item');
+          if (li) li.remove();
+          if (!diagramList.querySelector('.diagram-list-item')) {
+            diagramList.innerHTML =
+              '<li class="empty-state">No diagrams yet. Create one above.</li>';
+          }
+        })
+        .catch((e) => {
+          showToast(`Error: ${e.message}`, 'error');
+          btn.disabled = false;
+        });
     }
   });
 
@@ -226,6 +280,70 @@
     authPassphrase.value = '';
     authError.classList.add('hidden');
     authPassphrase.focus();
+  });
+
+  // ── Admin: change passphrase ─────────────────────────────────────────────
+
+  const adminBtn              = document.getElementById('admin-btn');
+  const adminModal            = document.getElementById('admin-modal');
+  const adminNewPassphrase    = document.getElementById('admin-new-passphrase');
+  const adminConfirmPassphrase = document.getElementById('admin-confirm-passphrase');
+  const adminModalError       = document.getElementById('admin-modal-error');
+  const adminModalCancel      = document.getElementById('admin-modal-cancel');
+  const adminModalSubmit      = document.getElementById('admin-modal-submit');
+
+  function openAdminModal() {
+    adminNewPassphrase.value = '';
+    adminConfirmPassphrase.value = '';
+    adminModalError.classList.add('hidden');
+    adminModal.classList.remove('hidden');
+    adminNewPassphrase.focus();
+  }
+
+  function closeAdminModal() {
+    adminModal.classList.add('hidden');
+  }
+
+  function showAdminError(message) {
+    adminModalError.textContent = message;
+    adminModalError.classList.remove('hidden');
+  }
+
+  async function submitAdminChange() {
+    const newPass = adminNewPassphrase.value;
+    const confirmPass = adminConfirmPassphrase.value;
+    if (newPass.length < 8) {
+      showAdminError('New passphrase must be at least 8 characters.');
+      return;
+    }
+    if (newPass !== confirmPass) {
+      showAdminError('Passphrases do not match.');
+      return;
+    }
+    adminModalSubmit.disabled = true;
+    try {
+      await apiChangePassphrase(getCachedPassphrase(), newPass);
+      setCachedPassphrase(newPass);
+      closeAdminModal();
+      showToast('Passphrase updated', 'success');
+    } catch (e) {
+      showAdminError(e.message || 'Failed to update passphrase.');
+    } finally {
+      adminModalSubmit.disabled = false;
+    }
+  }
+
+  adminBtn.addEventListener('click', openAdminModal);
+  adminModalCancel.addEventListener('click', closeAdminModal);
+  adminModal.addEventListener('click', (e) => {
+    if (e.target === adminModal) closeAdminModal();
+  });
+  adminModalSubmit.addEventListener('click', submitAdminChange);
+  [adminNewPassphrase, adminConfirmPassphrase].forEach((input) => {
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') submitAdminChange();
+      if (e.key === 'Escape') closeAdminModal();
+    });
   });
 
   // ── Bootstrap: check for a cached passphrase ─────────────────────────────

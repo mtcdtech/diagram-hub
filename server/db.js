@@ -33,7 +33,7 @@ db.pragma('journal_mode = WAL');
 // We use a simple integer user_version pragma as a schema version counter.
 // Add new migration blocks below as the schema evolves; never change existing ones.
 
-const CURRENT_VERSION = 1;
+const CURRENT_VERSION = 2;
 const version = db.pragma('user_version', { simple: true });
 
 if (version < 1) {
@@ -47,6 +47,17 @@ if (version < 1) {
   `);
   db.pragma('user_version = 1');
   console.log('[db] Schema migrated to version 1');
+}
+
+if (version < 2) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS settings (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+  `);
+  db.pragma('user_version = 2');
+  console.log('[db] Schema migrated to version 2');
 }
 
 console.log(`[db] Database ready at ${DB_PATH}`);

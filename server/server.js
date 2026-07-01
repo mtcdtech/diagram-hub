@@ -49,12 +49,33 @@ function generateId(length = 10) {
 }
 
 /**
+ * The edit passphrase can be changed at runtime via the Admin panel.
+ * When changed, the new value is stored in the `settings` table and takes
+ * precedence over the EDIT_PASSPHRASE env var, which then only serves as
+ * the initial value on first boot (or after a fresh volume).
+ */
+const PASSPHRASE_SETTING_KEY = 'edit_passphrase';
+
+function getCurrentPassphrase() {
+  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(PASSPHRASE_SETTING_KEY);
+  if (row) return row.value;
+  return process.env.EDIT_PASSPHRASE || '';
+}
+
+function setCurrentPassphrase(newValue) {
+  db.prepare(`
+    INSERT INTO settings (key, value) VALUES (?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `).run(PASSPHRASE_SETTING_KEY, newValue);
+}
+
+/**
  * Constant-time passphrase comparison to mitigate timing attacks.
  * Both sides are hashed with SHA-256 before comparison so the buffers
  * are always the same length (a requirement of timingSafeEqual).
  */
 function passphraseValid(provided) {
-  const expected = process.env.EDIT_PASSPHRASE;
+  const expected = getCurrentPassphrase();
   if (!expected) {
     // If no passphrase is configured, reject everything — safer than allowing all.
     return false;
@@ -224,6 +245,39 @@ app.put('/api/diagrams/:id', requirePassphrase, (req, res) => {
   }
 
   return res.json({ updatedAt: now });
+});
+
+// ---------------------------------------------------------------------------
+// DELETE /api/diagrams/:id — permanently delete a diagram (passphrase required)
+// ---------------------------------------------------------------------------
+
+app.delete('/api/diagrams/:id', requirePassphrase, (req, res) => {
+  const { id } = req.params;
+
+  const row = db.prepare('SELECT id FROM diagrams WHERE id = ?').get(id);
+  if (!row) {
+    return res.status(404).json({ error: 'Diagram not found.' });
+  }
+
+  db.prepare('DELETE FROM diagrams WHERE id = ?').run(id);
+  return res.status(204).send();
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/admin/change-passphrase — change the shared edit passphrase.
+// Requires the CURRENT passphrase (via X-Edit-Passphrase, checked by
+// requirePassphrase) and a new passphrase in the request body.
+// ---------------------------------------------------------------------------
+
+app.post('/api/admin/change-passphrase', requirePassphrase, (req, res) => {
+  const { newPassphrase } = req.body;
+
+  if (!newPassphrase || typeof newPassphrase !== 'string' || newPassphrase.length < 8) {
+    return res.status(400).json({ error: 'New passphrase must be at least 8 characters.' });
+  }
+
+  setCurrentPassphrase(newPassphrase);
+  return res.json({ ok: true });
 });
 
 // ---------------------------------------------------------------------------

@@ -385,7 +385,12 @@ a:hover { text-decoration: underline; }
   inset: 0;
   width: 100%;
   height: 100%;
-  overflow: hidden;
+  /* GraphViewer's hover toolbar and layers dropdown render as floating
+     elements positioned relative to this container; overflow:hidden was
+     clipping/suppressing them on hover, forcing users to right-click to
+     surface the toolbar. visible lets them render outside the strict
+     bounds while nav/resize keep the canvas itself constrained via inset:0. */
+  overflow: visible;
   background: var(--color-bg, #fff);
 }
 
