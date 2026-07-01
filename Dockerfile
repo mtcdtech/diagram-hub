@@ -22,15 +22,17 @@ RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 WORKDIR /app
 
 # Copy package files first so Docker layer caching works well.
-COPY server/package.json server/package-lock.json* ./
+# Kept inside server/ so it stays a sibling of public/, matching the
+# server/ + public/ layout that server.js's express.static path
+# (path.join(__dirname, '..', 'public')) expects.
+COPY server/package.json server/package-lock.json* ./server/
 
 # Install production dependencies only.
-RUN npm install --omit=dev
+RUN cd server && npm install --omit=dev
 
-# Copy application source.
-COPY server/server.js ./
-COPY server/db.js     ./
-COPY public/          ./public/
+# Copy application source, preserving the server/ + public/ sibling layout.
+COPY server/server.js server/db.js ./server/
+COPY public/                       ./public/
 
 # Create /data directory owned by our non-root user.
 RUN mkdir -p /data && chown appuser:appgroup /data
@@ -48,4 +50,4 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD wget -qO- http://localhost:3000/healthz || exit 1
 
-CMD ["node", "server.js"]
+CMD ["node", "server/server.js"]
