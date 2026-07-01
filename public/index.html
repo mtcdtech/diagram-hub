@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Diagram Hub — Dashboard</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<div id="app">
+
+  <!-- ── Auth gate ──────────────────────────────────────────────────────── -->
+  <!-- Shown first; replaced by the main dashboard after a correct passphrase. -->
+  <div id="auth-screen" class="container">
+    <div class="page-header">
+      <div>
+        <h1>Diagram Hub</h1>
+        <p class="subtitle">Companion app for your self-hosted draw.io instance</p>
+      </div>
+    </div>
+
+    <div class="card auth-gate">
+      <h2>Enter edit passphrase</h2>
+      <p>
+        A shared passphrase is required to access the diagram list and create or
+        edit diagrams. Viewing a specific diagram by URL is public.
+      </p>
+      <div class="auth-form">
+        <input
+          id="auth-passphrase"
+          type="password"
+          placeholder="Passphrase…"
+          autocomplete="current-password"
+        />
+        <button id="auth-submit" class="btn btn-primary">Unlock</button>
+      </div>
+      <span id="auth-error" class="auth-error hidden">Incorrect passphrase.</span>
+    </div>
+  </div>
+
+  <!-- ── Main dashboard (shown after unlock) ───────────────────────────── -->
+  <div id="dashboard-screen" class="container hidden">
+
+    <div class="page-header">
+      <div style="flex:1">
+        <h1>Diagram Hub</h1>
+        <p class="subtitle">Your diagrams</p>
+      </div>
+      <button id="logout-btn" class="btn btn-secondary btn-sm">Lock</button>
+    </div>
+
+    <!-- New diagram form -->
+    <div class="new-diagram-bar">
+      <input
+        id="new-title"
+        type="text"
+        placeholder="New diagram name…"
+        maxlength="120"
+      />
+      <button id="new-diagram-btn" class="btn btn-primary">+ New Diagram</button>
+    </div>
+
+    <!-- Diagram list -->
+    <div class="card">
+      <ul id="diagram-list" class="diagram-list">
+        <li class="empty-state" id="loading-indicator">Loading…</li>
+      </ul>
+    </div>
+
+  </div>
+
+</div><!-- /#app -->
+
+<!-- Toast container (injected by app.js if needed) -->
+<div id="toast-container"></div>
+
+<script src="app.js"></script>
+<script>
+  // ── Dashboard controller ─────────────────────────────────────────────────
+
+  const authScreen      = document.getElementById('auth-screen');
+  const dashboardScreen = document.getElementById('dashboard-screen');
+  const authPassphrase  = document.getElementById('auth-passphrase');
+  const authSubmit      = document.getElementById('auth-submit');
+  const authError       = document.getElementById('auth-error');
+  const logoutBtn       = document.getElementById('logout-btn');
+  const newTitleInput   = document.getElementById('new-title');
+  const newDiagramBtn   = document.getElementById('new-diagram-btn');
+  const diagramList     = document.getElementById('diagram-list');
+  const loadingIndicator = document.getElementById('loading-indicator');
+
+  // ── Auth flow ────────────────────────────────────────────────────────────
+
+  /** Try to unlock using the supplied passphrase. Rejects with an error
+   *  message string on failure. */
+  async function tryUnlock(passphrase) {
+    // Use the list endpoint to validate the passphrase server-side.
+    const res = await fetch('/api/diagrams', {
+      headers: { 'X-Edit-Passphrase': passphrase },
+    });
+    if (res.status === 401) throw new Error('incorrect');
+    if (!res.ok)            throw new Error(`server error ${res.status}`);
+    return res.json(); // array of diagrams
+  }
+
+  async function handleUnlock() {
+    const passphrase = authPassphrase.value.trim();
+    if (!passphrase) return;
+
+    authSubmit.disabled = true;
+    authError.classList.add('hidden');
+
+    try {
+      const diagrams = await tryUnlock(passphrase);
+      setCachedPassphrase(passphrase);
+      showDashboard(diagrams);
+    } catch (e) {
+      authError.classList.remove('hidden');
+      authPassphrase.select();
+    } finally {
+      authSubmit.disabled = false;
+    }
+  }
+
+  authSubmit.addEventListener('click', handleUnlock);
+  authPassphrase.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') handleUnlock();
+  });
+
+  // ── Dashboard rendering ──────────────────────────────────────────────────
+
+  function showDashboard(diagrams) {
+    authScreen.classList.add('hidden');
+    dashboardScreen.classList.remove('hidden');
+    newTitleInput.focus();
+    renderList(diagrams);
+  }
+
+  function renderList(diagrams) {
+    diagramList.innerHTML = '';
+    if (diagrams.length === 0) {
+      diagramList.innerHTML =
+        '<li class="empty-state">No diagrams yet. Create one above.</li>';
+      return;
+    }
+    for (const d of diagrams) {
+      const li = document.createElement('li');
+      li.className = 'diagram-list-item';
+      li.innerHTML = `
+        <div style="flex:1">
+          <div class="item-title">${escHtml(d.title)}</div>
+          <div class="item-meta">Updated ${relativeTime(d.updatedAt)}</div>
+        </div>
+        <div class="item-actions">
+          <a href="/d/${escHtml(d.id)}" class="btn btn-secondary btn-sm">View</a>
+          <button
+            class="btn btn-primary btn-sm"
+            data-id="${escHtml(d.id)}"
+            data-action="edit">Edit</button>
+          <button
+            class="btn btn-secondary btn-sm"
+            data-id="${escHtml(d.id)}"
+            data-action="copy-link">Share</button>
+        </div>`;
+      diagramList.appendChild(li);
+    }
+  }
+
+  // Delegate clicks on action buttons inside the list.
+  diagramList.addEventListener('click', (e) => {
+    const btn    = e.target.closest('[data-action]');
+    if (!btn) return;
+    const id     = btn.dataset.id;
+    const action = btn.dataset.action;
+
+    if (action === 'edit') {
+      // Navigate to the diagram page; it will use the cached passphrase.
+      window.location.href = `/d/${id}`;
+    } else if (action === 'copy-link') {
+      const url = `${window.location.origin}/d/${id}`;
+      navigator.clipboard.writeText(url)
+        .then(() => showToast('Link copied to clipboard', 'success'))
+        .catch(() => showToast(`Share URL: ${url}`, 'info', 6000));
+    }
+  });
+
+  // ── New diagram ──────────────────────────────────────────────────────────
+
+  newDiagramBtn.addEventListener('click', createDiagram);
+  newTitleInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') createDiagram();
+  });
+
+  async function createDiagram() {
+    const title = newTitleInput.value.trim();
+    if (!title) {
+      newTitleInput.focus();
+      return;
+    }
+    newDiagramBtn.disabled = true;
+    try {
+      const diagram = await apiCreateDiagram(title, getCachedPassphrase());
+      showToast('Diagram created!', 'success');
+      newTitleInput.value = '';
+      // Navigate straight to the edit page.
+      window.location.href = `/d/${diagram.id}`;
+    } catch (e) {
+      showToast(`Error: ${e.message}`, 'error');
+      if (e.message.includes('401') || e.message.toLowerCase().includes('passphrase')) {
+        // Session may have expired; force re-auth.
+        clearCachedPassphrase();
+        location.reload();
+      }
+    } finally {
+      newDiagramBtn.disabled = false;
+    }
+  }
+
+  // ── Lock / logout ────────────────────────────────────────────────────────
+
+  logoutBtn.addEventListener('click', () => {
+    clearCachedPassphrase();
+    dashboardScreen.classList.add('hidden');
+    authScreen.classList.remove('hidden');
+    authPassphrase.value = '';
+    authError.classList.add('hidden');
+    authPassphrase.focus();
+  });
+
+  // ── Bootstrap: check for a cached passphrase ─────────────────────────────
+
+  (async function init() {
+    const cached = getCachedPassphrase();
+    if (cached) {
+      try {
+        const diagrams = await tryUnlock(cached);
+        showDashboard(diagrams);
+        return;
+      } catch {
+        // Cached passphrase is wrong (e.g. server restarted with different secret).
+        clearCachedPassphrase();
+      }
+    }
+    // Show auth gate.
+    authPassphrase.focus();
+  })();
+
+  // ── Utility ──────────────────────────────────────────────────────────────
+
+  function escHtml(str) {
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+</script>
+</body>
+</html>

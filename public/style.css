@@ -1,0 +1,420 @@
+/*
+ * style.css — Diagram Hub shared styles.
+ * Minimal, responsive, no framework dependencies.
+ */
+
+/* ── Reset & base ─────────────────────────────────────────────────────── */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --color-bg:          #f4f5f7;
+  --color-surface:     #ffffff;
+  --color-border:      #d9dde6;
+  --color-primary:     #1a73e8;
+  --color-primary-dk:  #1558b0;
+  --color-danger:      #d93025;
+  --color-text:        #202124;
+  --color-text-muted:  #5f6368;
+  --color-success:     #137333;
+  --color-warning-bg:  #fef7e0;
+  --color-warning-bd:  #f9ab00;
+  --radius:            6px;
+  --shadow:            0 1px 3px rgba(0,0,0,.12), 0 1px 2px rgba(0,0,0,.08);
+  --transition:        .18s ease;
+}
+
+html, body {
+  height: 100%;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  color: var(--color-text);
+  background: var(--color-bg);
+  line-height: 1.5;
+}
+
+a {
+  color: var(--color-primary);
+  text-decoration: none;
+}
+a:hover { text-decoration: underline; }
+
+/* ── Layout helpers ───────────────────────────────────────────────────── */
+
+.container {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 24px 16px;
+}
+
+/* ── Page header ─────────────────────────────────────────────────────── */
+
+.page-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.page-header h1 {
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.page-header .subtitle {
+  color: var(--color-text-muted);
+  font-size: 13px;
+  margin-top: 2px;
+}
+
+/* ── Buttons ─────────────────────────────────────────────────────────── */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 16px;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--transition), box-shadow var(--transition);
+  white-space: nowrap;
+}
+.btn:disabled { opacity: .5; cursor: default; }
+
+.btn-primary {
+  background: var(--color-primary);
+  color: #fff;
+  border-color: var(--color-primary);
+}
+.btn-primary:hover:not(:disabled) {
+  background: var(--color-primary-dk);
+  border-color: var(--color-primary-dk);
+}
+
+.btn-secondary {
+  background: var(--color-surface);
+  color: var(--color-text);
+  border-color: var(--color-border);
+}
+.btn-secondary:hover:not(:disabled) {
+  background: #eef1f8;
+}
+
+.btn-danger {
+  background: var(--color-surface);
+  color: var(--color-danger);
+  border-color: var(--color-border);
+}
+.btn-danger:hover:not(:disabled) {
+  background: #fce8e6;
+  border-color: var(--color-danger);
+}
+
+.btn-sm {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+/* ── Cards ───────────────────────────────────────────────────────────── */
+
+.card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+/* ── Dashboard diagram list ──────────────────────────────────────────── */
+
+.diagram-list {
+  list-style: none;
+}
+
+.diagram-list-item {
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--color-border);
+  gap: 12px;
+}
+.diagram-list-item:last-child { border-bottom: none; }
+
+.diagram-list-item .item-title {
+  flex: 1;
+  font-weight: 500;
+}
+
+.diagram-list-item .item-meta {
+  color: var(--color-text-muted);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.diagram-list-item .item-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.empty-state {
+  padding: 40px 16px;
+  text-align: center;
+  color: var(--color-text-muted);
+}
+
+/* ── Auth gate / passphrase bar ──────────────────────────────────────── */
+
+.auth-gate {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+  gap: 16px;
+  text-align: center;
+}
+
+.auth-gate h2 { font-size: 18px; }
+.auth-gate p  { color: var(--color-text-muted); max-width: 380px; }
+
+.auth-form {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.auth-form input[type="password"] {
+  padding: 7px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  font-size: 14px;
+  width: 220px;
+  outline: none;
+  transition: border-color var(--transition);
+}
+.auth-form input[type="password"]:focus {
+  border-color: var(--color-primary);
+}
+
+.auth-error {
+  color: var(--color-danger);
+  font-size: 13px;
+}
+
+/* ── New diagram form ────────────────────────────────────────────────── */
+
+.new-diagram-bar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.new-diagram-bar input[type="text"] {
+  flex: 1;
+  min-width: 200px;
+  padding: 7px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  font-size: 14px;
+  outline: none;
+  transition: border-color var(--transition);
+}
+.new-diagram-bar input[type="text"]:focus {
+  border-color: var(--color-primary);
+}
+
+/* ── Passphrase modal (diagram page) ─────────────────────────────────── */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+.modal-overlay.hidden { display: none; }
+
+.modal {
+  background: var(--color-surface);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 32px rgba(0,0,0,.2);
+  padding: 28px 32px;
+  width: 340px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.modal h3 { font-size: 16px; }
+.modal p  { color: var(--color-text-muted); font-size: 13px; }
+
+.modal input[type="password"] {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  font-size: 14px;
+  outline: none;
+  transition: border-color var(--transition);
+}
+.modal input[type="password"]:focus { border-color: var(--color-primary); }
+
+.modal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+/* ── Diagram page toolbar ────────────────────────────────────────────── */
+
+.diagram-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.diagram-toolbar .title-area {
+  flex: 1;
+}
+.diagram-toolbar .diagram-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+.diagram-toolbar .diagram-meta {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.mode-badge {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  padding: 2px 8px;
+  border-radius: 99px;
+  background: #e8f0fe;
+  color: var(--color-primary);
+}
+.mode-badge.edit {
+  background: #e6f4ea;
+  color: var(--color-success);
+}
+
+/* ── Banner (new-changes notification) ──────────────────────────────── */
+
+.banner {
+  padding: 8px 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  background: var(--color-warning-bg);
+  border-bottom: 1px solid var(--color-warning-bd);
+  flex-shrink: 0;
+}
+.banner.hidden { display: none; }
+
+.banner .banner-msg { flex: 1; }
+
+/* ── Toast notifications ─────────────────────────────────────────────── */
+
+#toast-container {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 200;
+  pointer-events: none;
+}
+
+.toast {
+  padding: 10px 18px;
+  border-radius: var(--radius);
+  background: #3c4043;
+  color: #fff;
+  font-size: 13px;
+  box-shadow: 0 2px 8px rgba(0,0,0,.25);
+  animation: toast-in .2s ease;
+  pointer-events: none;
+}
+.toast.error { background: var(--color-danger); }
+.toast.success { background: var(--color-success); }
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Iframe wrapper ──────────────────────────────────────────────────── */
+
+.iframe-wrapper {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+
+.iframe-wrapper iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: none;
+}
+
+/* ── Full-height diagram page layout ─────────────────────────────────── */
+
+.diagram-page {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ── Spinner / loading overlay ───────────────────────────────────────── */
+
+.loading-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255,255,255,.8);
+  z-index: 10;
+}
+.loading-overlay.hidden { display: none; }
+
+.spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid var(--color-border);
+  border-top-color: var(--color-primary);
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Misc utilities ──────────────────────────────────────────────────── */
+
+.hidden { display: none !important; }
+
+.text-muted { color: var(--color-text-muted); }

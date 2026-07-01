@@ -1,0 +1,82 @@
+# docker-compose.yml — Diagram Hub
+# ─────────────────────────────────────────────────────────────────────────────
+# This file defines ONLY the diagram-hub service.
+# Your existing draw.io container is referenced in the commented block below.
+#
+# How to integrate with your existing draw.io setup:
+#
+#   Option A — Extend your existing docker-compose.yml
+#     Copy the `diagram-hub` service block into your existing file and add
+#     `diagram-hub` to the same external network your draw.io container uses.
+#
+#   Option B — Use this as a separate compose project
+#     Set DRAWIO_EMBED_URL to the public HTTPS URL your users already use to
+#     reach draw.io (e.g. https://drawio.example.com).  No Docker networking
+#     between the two services is required because the embed URL is resolved
+#     by the end-user's browser, not by the server.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# Existing draw.io service (for reference — do NOT uncomment unless you are
+# migrating to a single compose file):
+#
+# services:
+#   drawio:
+#     image: jgraph/drawio
+#     restart: unless-stopped
+#     ports:
+#       - "8080:8080"
+#     networks:
+#       - diagramnet
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  diagram-hub:
+    build:
+      context: .       # Dockerfile is in the project root
+    image: diagram-hub:latest
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      # REQUIRED — shared passphrase for create/edit/list operations.
+      # Set via a .env file or your deployment secret manager; do NOT commit
+      # the real value to version control.
+      EDIT_PASSPHRASE: "${EDIT_PASSPHRASE:?EDIT_PASSPHRASE must be set}"
+
+      # REQUIRED — base URL of your existing self-hosted draw.io instance,
+      # as reachable by end-users' browsers (i.e. the public HTTPS URL).
+      # Example: https://drawio.example.com
+      DRAWIO_EMBED_URL: "${DRAWIO_EMBED_URL:?DRAWIO_EMBED_URL must be set}"
+
+      # Optional overrides (defaults shown):
+      PORT:     "3000"
+      DATA_DIR: "/data"
+
+    volumes:
+      # Named volume for the SQLite database. To back up, run:
+      #   docker run --rm -v diagram_data:/data -v $(pwd):/backup \
+      #     alpine tar czf /backup/diagrams-backup.tar.gz /data
+      - diagram_data:/data
+
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    # If you want diagram-hub on the same Docker network as draw.io, uncomment:
+    # networks:
+    #   - diagramnet
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Named volume — the SQLite database persists here across container restarts.
+volumes:
+  diagram_data:
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Uncomment if sharing a Docker network with draw.io (see Option A above):
+# networks:
+#   diagramnet:
+#     external: true   # or remove this line to let compose create it

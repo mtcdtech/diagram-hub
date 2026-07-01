@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Diagram Hub</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+
+<!-- Full-height flex layout: toolbar → optional banner → iframe -->
+<div class="diagram-page" id="diagram-page">
+
+  <!-- ── Toolbar ──────────────────────────────────────────────────────── -->
+  <div class="diagram-toolbar">
+    <a href="/" style="flex-shrink:0">
+      <button class="btn btn-secondary btn-sm">← Hub</button>
+    </a>
+
+    <div class="title-area">
+      <div class="diagram-title" id="diagram-title">Loading…</div>
+      <div class="diagram-meta"  id="diagram-meta"></div>
+    </div>
+
+    <!-- Mode badge: VIEW or EDIT -->
+    <span class="mode-badge" id="mode-badge">VIEW</span>
+
+    <!-- Action buttons -->
+    <button id="edit-btn"  class="btn btn-primary  btn-sm">Edit</button>
+    <button id="share-btn" class="btn btn-secondary btn-sm">Share</button>
+  </div>
+
+  <!-- ── "New changes" banner (hidden until polling detects a newer save) ── -->
+  <div class="banner hidden" id="changes-banner">
+    <span class="banner-msg" id="banner-msg">New changes available — click to reload.</span>
+    <button id="banner-reload" class="btn btn-secondary btn-sm">Reload</button>
+    <button id="banner-dismiss" class="btn btn-sm" style="color:var(--color-text-muted)">✕</button>
+  </div>
+
+  <!-- ── draw.io iframe wrapper ──────────────────────────────────────── -->
+  <div class="iframe-wrapper">
+    <div class="loading-overlay" id="loading-overlay">
+      <div class="spinner"></div>
+    </div>
+    <iframe
+      id="drawio-frame"
+      title="draw.io diagram editor"
+      allow="clipboard-read; clipboard-write"
+    ></iframe>
+  </div>
+
+</div><!-- /.diagram-page -->
+
+<!-- Passphrase modal (shown when Edit is clicked without a cached passphrase) -->
+<div class="modal-overlay hidden" id="passphrase-modal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <h3 id="modal-title">Enter edit passphrase</h3>
+    <p>
+      Editing requires a shared passphrase. It will be remembered for this
+      browser session only.
+    </p>
+    <input
+      id="modal-passphrase"
+      type="password"
+      placeholder="Passphrase…"
+      autocomplete="current-password"
+    />
+    <span id="modal-error" class="auth-error hidden">Incorrect passphrase.</span>
+    <div class="modal-actions">
+      <button id="modal-cancel" class="btn btn-secondary">Cancel</button>
+      <button id="modal-submit" class="btn btn-primary">Unlock Edit</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast container -->
+<div id="toast-container"></div>
+
+<script src="/app.js"></script>
+<script>
+  // ── Extract diagram ID from URL path  (/d/:id) ───────────────────────────
+  const diagramId = (location.pathname.match(/^\/d\/([A-Za-z0-9]+)/) || [])[1];
+  if (!diagramId) {
+    document.getElementById('diagram-title').textContent = 'Diagram not found';
+    throw new Error('No diagram ID in URL');
+  }
+
+  // ── DOM refs ─────────────────────────────────────────────────────────────
+  const iframe         = document.getElementById('drawio-frame');
+  const titleEl        = document.getElementById('diagram-title');
+  const metaEl         = document.getElementById('diagram-meta');
+  const modeBadge      = document.getElementById('mode-badge');
+  const editBtn        = document.getElementById('edit-btn');
+  const shareBtn       = document.getElementById('share-btn');
+  const changesBanner  = document.getElementById('changes-banner');
+  const bannerMsg      = document.getElementById('banner-msg');
+  const bannerReload   = document.getElementById('banner-reload');
+  const bannerDismiss  = document.getElementById('banner-dismiss');
+  const loadingOverlay = document.getElementById('loading-overlay');
+
+  const passphraseModal = document.getElementById('passphrase-modal');
+  const modalPassphrase = document.getElementById('modal-passphrase');
+  const modalError      = document.getElementById('modal-error');
+  const modalCancel     = document.getElementById('modal-cancel');
+  const modalSubmit     = document.getElementById('modal-submit');
+
+  // ── State ────────────────────────────────────────────────────────────────
+  let currentMode  = 'view';      // 'view' | 'edit'
+  let lastUpdatedAt = 0;          // used by polling
+  let embed        = null;        // DiagramEmbed instance
+  let stopPolling  = null;        // function to cancel the polling loop
+  let metaInterval = null;        // for updating "X min ago" display
+
+  // ── Initialise in view mode ───────────────────────────────────────────────
+
+  async function initView() {
+    currentMode = 'view';
+    modeBadge.textContent = 'VIEW';
+    modeBadge.classList.remove('edit');
+    editBtn.textContent = 'Edit';
+
+    // Fetch meta first (public) to seed the updatedAt timestamp.
+    try {
+      const metaRes = await fetch(`/api/diagrams/${diagramId}/meta`);
+      if (metaRes.ok) {
+        const meta = await metaRes.json();
+        lastUpdatedAt = meta.updatedAt;
+        updateMetaDisplay(meta.updatedAt);
+      }
+    } catch { /* ignore */ }
+
+    // Load the title from the view endpoint.
+    try {
+      const res = await fetch(`/api/diagrams/${diagramId}?mode=view`);
+      if (res.ok) {
+        const data = await res.json();
+        titleEl.textContent = data.title;
+        document.title = `${data.title} — Diagram Hub`;
+      }
+    } catch { /* ignore */ }
+
+    destroyEmbed();
+    embed = new DiagramEmbed({
+      iframe,
+      diagramId,
+      mode:       'view',
+      passphrase: '',
+      onReady:    () => { loadingOverlay.classList.add('hidden'); },
+    });
+
+    loadingOverlay.classList.remove('hidden');
+    try {
+      await embed.load();
+    } catch (e) {
+      showToast(`Could not load diagram: ${e.message}`, 'error');
+      loadingOverlay.classList.add('hidden');
+    }
+
+    startMetaInterval();
+    beginPolling();
+  }
+
+  async function initEdit(passphrase) {
+    currentMode = 'edit';
+    modeBadge.textContent = 'EDIT';
+    modeBadge.classList.add('edit');
+    editBtn.textContent = 'Switch to View';
+
+    destroyEmbed();
+    embed = new DiagramEmbed({
+      iframe,
+      diagramId,
+      mode:       'edit',
+      passphrase,
+      onSaved:    (updatedAt) => {
+        lastUpdatedAt = updatedAt;
+        updateMetaDisplay(updatedAt);
+      },
+      onReady:    () => { loadingOverlay.classList.add('hidden'); },
+    });
+
+    loadingOverlay.classList.remove('hidden');
+    try {
+      await embed.load();
+      showToast('Edit mode — changes save automatically.', 'success', 2500);
+    } catch (e) {
+      if (e.message.includes('401')) {
+        showToast('Passphrase rejected by server.', 'error');
+        // Fall back to view mode and clear cached passphrase.
+        clearCachedPassphrase();
+        await initView();
+        return;
+      }
+      showToast(`Could not load for editing: ${e.message}`, 'error');
+      loadingOverlay.classList.add('hidden');
+    }
+
+    startMetaInterval();
+    beginPolling();
+  }
+
+  function destroyEmbed() {
+    if (embed) { embed.destroy(); embed = null; }
+    if (stopPolling) { stopPolling(); stopPolling = null; }
+    if (metaInterval) { clearInterval(metaInterval); metaInterval = null; }
+    changesBanner.classList.add('hidden');
+  }
+
+  // ── Polling ───────────────────────────────────────────────────────────────
+
+  function beginPolling() {
+    if (stopPolling) stopPolling();
+    stopPolling = startPolling(diagramId, lastUpdatedAt, (newUpdatedAt) => {
+      // Only surface the banner if we're in view mode, or if we're in edit mode
+      // and a DIFFERENT session saved (someone else).
+      // In edit mode, our own saves update lastUpdatedAt immediately via onSaved,
+      // so polling will only fire if the remote value is genuinely newer than
+      // what we last saved — meaning another editor is present.
+      lastUpdatedAt = newUpdatedAt;
+      showChangesBanner(newUpdatedAt);
+    });
+  }
+
+  function showChangesBanner(updatedAt) {
+    bannerMsg.textContent =
+      `New changes available (saved ${relativeTime(updatedAt)}) — click to reload.`;
+    changesBanner.classList.remove('hidden');
+  }
+
+  bannerReload.addEventListener('click', async () => {
+    changesBanner.classList.add('hidden');
+    if (currentMode === 'view') {
+      if (embed) {
+        loadingOverlay.classList.remove('hidden');
+        await embed.refresh();
+        loadingOverlay.classList.add('hidden');
+      }
+    } else {
+      // In edit mode: warn that unsaved edits may be overwritten by a reload.
+      if (confirm('Reload diagram from server? Any unsaved local changes will be lost.')) {
+        if (embed) {
+          loadingOverlay.classList.remove('hidden');
+          await embed.refresh();
+          loadingOverlay.classList.add('hidden');
+        }
+      }
+    }
+  });
+
+  bannerDismiss.addEventListener('click', () => {
+    changesBanner.classList.add('hidden');
+  });
+
+  // ── Meta display ("Updated X ago") ───────────────────────────────────────
+
+  function updateMetaDisplay(updatedAt) {
+    metaEl.textContent = updatedAt ? `Updated ${relativeTime(updatedAt)}` : '';
+  }
+
+  function startMetaInterval() {
+    if (metaInterval) clearInterval(metaInterval);
+    metaInterval = setInterval(() => {
+      if (lastUpdatedAt) updateMetaDisplay(lastUpdatedAt);
+    }, 30_000); // refresh relative string every 30s
+  }
+
+  // ── Edit button ───────────────────────────────────────────────────────────
+
+  editBtn.addEventListener('click', async () => {
+    if (currentMode === 'edit') {
+      // Switch back to view mode.
+      await initView();
+      return;
+    }
+
+    const cached = getCachedPassphrase();
+    if (cached) {
+      await initEdit(cached);
+    } else {
+      openPassphraseModal();
+    }
+  });
+
+  // ── Share button ──────────────────────────────────────────────────────────
+
+  shareBtn.addEventListener('click', () => {
+    const url = `${location.origin}/d/${diagramId}`;
+    navigator.clipboard.writeText(url)
+      .then(() => showToast('Share link copied to clipboard', 'success'))
+      .catch(() => showToast(`Share URL: ${url}`, 'info', 6000));
+  });
+
+  // ── Passphrase modal ──────────────────────────────────────────────────────
+
+  function openPassphraseModal() {
+    passphraseModal.classList.remove('hidden');
+    modalPassphrase.value = '';
+    modalError.classList.add('hidden');
+    setTimeout(() => modalPassphrase.focus(), 50);
+  }
+
+  function closePassphraseModal() {
+    passphraseModal.classList.add('hidden');
+    modalPassphrase.value = '';
+    modalError.classList.add('hidden');
+  }
+
+  modalCancel.addEventListener('click', closePassphraseModal);
+  passphraseModal.addEventListener('click', (e) => {
+    // Close on backdrop click.
+    if (e.target === passphraseModal) closePassphraseModal();
+  });
+
+  async function submitPassphrase() {
+    const passphrase = modalPassphrase.value;
+    if (!passphrase) return;
+
+    modalSubmit.disabled = true;
+    modalError.classList.add('hidden');
+
+    // Validate passphrase by attempting a GET in edit mode.
+    try {
+      const res = await fetch(`/api/diagrams/${diagramId}?mode=edit`, {
+        headers: { 'X-Edit-Passphrase': passphrase },
+      });
+      if (res.status === 401) {
+        modalError.classList.remove('hidden');
+        modalPassphrase.select();
+        return;
+      }
+      // Passphrase accepted.
+      setCachedPassphrase(passphrase);
+      closePassphraseModal();
+      await initEdit(passphrase);
+    } catch (e) {
+      showToast(`Network error: ${e.message}`, 'error');
+    } finally {
+      modalSubmit.disabled = false;
+    }
+  }
+
+  modalSubmit.addEventListener('click', submitPassphrase);
+  modalPassphrase.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') submitPassphrase();
+    if (e.key === 'Escape') closePassphraseModal();
+  });
+
+  // ── Bootstrap ────────────────────────────────────────────────────────────
+
+  // Always start in view mode; the user can switch to edit via the button.
+  initView();
+</script>
+</body>
+</html>
