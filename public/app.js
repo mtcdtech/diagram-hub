@@ -445,6 +445,14 @@ class DiagramViewer {
       // (mxGraph) object — needed for exact coordinate math. This still
       // works with data-mxgraph markup exactly like processElements does.
       const createForThisElement = () => {
+        // Guard against a race: the viewer script (loaded once per page,
+        // asynchronously) may finish loading AFTER this instance has already
+        // been destroy()ed (e.g. the user switched to Edit mode before the
+        // View-mode script finished downloading). destroy() nulls _mxDiv, so
+        // without this guard createViewerForElement(null, ...) throws and
+        // leaves an uncaught error on the page. Just bail out silently —
+        // nobody is awaiting this stale instance's promise anymore.
+        if (!this._mxDiv) { resolve(); return; }
         window.GraphViewer.createViewerForElement(this._mxDiv, (viewer) => {
           this._viewer = viewer;
           this.graph   = viewer.graph;
@@ -478,7 +486,7 @@ class DiagramViewer {
   async refresh() {
     const data = await this._fetchXml();
     this._render(data);
-    if (window.GraphViewer) {
+    if (window.GraphViewer && this._mxDiv) {
       window.GraphViewer.createViewerForElement(this._mxDiv, (viewer) => {
         this._viewer = viewer;
         this.graph   = viewer.graph;

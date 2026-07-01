@@ -11,20 +11,22 @@
   padding: 0;
 }
 
+/* Palette derived from the Diagram Maker app icon: roasted-orange accent on
+   a warm cream surface, with a deep brown reserved for hover/emphasis. */
 :root {
-  --color-bg:          #f4f5f7;
+  --color-bg:          #faf6f1;
   --color-surface:     #ffffff;
-  --color-border:      #d9dde6;
-  --color-primary:     #1a73e8;
-  --color-primary-dk:  #1558b0;
+  --color-border:      #e5dccf;
+  --color-primary:     #b35400;
+  --color-primary-dk:  #8a4200;
   --color-danger:      #d93025;
-  --color-text:        #202124;
-  --color-text-muted:  #5f6368;
+  --color-text:        #241c15;
+  --color-text-muted:  #7a6a5c;
   --color-success:     #137333;
-  --color-warning-bg:  #fef7e0;
+  --color-warning-bg:  #fdf1e0;
   --color-warning-bd:  #f9ab00;
   --color-priority-low:    #1e8e3e;
-  --color-priority-medium: #f2a600;
+  --color-priority-medium: #d99000;
   --color-priority-high:   #d93025;
   --radius:            6px;
   --shadow:            0 1px 3px rgba(0,0,0,.12), 0 1px 2px rgba(0,0,0,.08);
@@ -64,6 +66,14 @@ a:hover { text-decoration: underline; }
   align-items: center;
   gap: 12px;
   margin-bottom: 24px;
+}
+
+.app-logo {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  flex-shrink: 0;
+  box-shadow: var(--shadow);
 }
 
 .page-header h1 {
@@ -110,7 +120,7 @@ a:hover { text-decoration: underline; }
   border-color: var(--color-border);
 }
 .btn-secondary:hover:not(:disabled) {
-  background: #eef1f8;
+  background: #f3ece2;
 }
 
 .btn-danger {
@@ -286,7 +296,8 @@ a:hover { text-decoration: underline; }
 .diagram-toolbar {
   display: flex;
   align-items: center;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 8px 10px;
   padding: 8px 16px;
   background: var(--color-surface);
   border-bottom: 1px solid var(--color-border);
@@ -295,6 +306,7 @@ a:hover { text-decoration: underline; }
 
 .diagram-toolbar .title-area {
   flex: 1;
+  min-width: 120px;
 }
 .diagram-toolbar .diagram-title {
   font-size: 15px;
@@ -312,7 +324,7 @@ a:hover { text-decoration: underline; }
   letter-spacing: .04em;
   padding: 2px 8px;
   border-radius: 99px;
-  background: #e8f0fe;
+  background: #fbe7d3;
   color: var(--color-primary);
 }
 .mode-badge.edit {
@@ -407,7 +419,8 @@ a:hover { text-decoration: underline; }
 .diagram-page {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: 100vh;   /* fallback for older browsers */
+  height: 100dvh;  /* real visible viewport height on mobile (ignores browser chrome) */
   overflow: hidden;
 }
 
@@ -418,6 +431,7 @@ a:hover { text-decoration: underline; }
   display: flex;
   min-height: 0;
   overflow: hidden;
+  position: relative; /* anchors the comments panel when it overlays on mobile */
 }
 
 .diagram-main {
@@ -499,7 +513,7 @@ a:hover { text-decoration: underline; }
 }
 .comment-thread.flash {
   border-color: var(--color-primary);
-  box-shadow: 0 0 0 3px rgba(26,115,232,.25);
+  box-shadow: 0 0 0 3px rgba(179,84,0,.25);
 }
 
 .comment-thread-header {
@@ -535,7 +549,7 @@ a:hover { text-decoration: underline; }
   letter-spacing: .03em;
   padding: 2px 7px;
   border-radius: 99px;
-  background: #e8f0fe;
+  background: #fbe7d3;
   color: var(--color-primary);
 }
 .comment-status-badge.resolved {
@@ -603,7 +617,7 @@ a:hover { text-decoration: underline; }
 .comment-click-layer.armed {
   pointer-events: auto;
   cursor: crosshair;
-  background: rgba(26,115,232,.04);
+  background: rgba(179,84,0,.04);
 }
 
 .comment-dots-layer {
@@ -628,6 +642,41 @@ a:hover { text-decoration: underline; }
 .comment-dot.priority-low    { background: var(--color-priority-low); }
 .comment-dot.priority-medium { background: var(--color-priority-medium); }
 .comment-dot.priority-high   { background: var(--color-priority-high); }
+
+.comment-dot.hover-active {
+  width: 22px;
+  height: 22px;
+  margin-left: -11px;
+  margin-top: -11px;
+  box-shadow: 0 0 0 4px rgba(179,84,0,.35), 0 1px 4px rgba(0,0,0,.45);
+  z-index: 1;
+  transition: width .12s ease, height .12s ease, margin .12s ease, box-shadow .12s ease;
+}
+
+/* ── Hover connector line (dot ↔ its comment card) ────────────────────── */
+
+.comment-hover-line-svg {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  pointer-events: none;
+  z-index: 40;
+  display: none;
+}
+.comment-hover-line-svg.visible { display: block; }
+.comment-hover-line-svg line {
+  stroke: var(--color-primary);
+  stroke-width: 2;
+  stroke-dasharray: 5 4;
+}
+
+.comment-thread.hover-highlight {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(179,84,0,.25);
+  background: var(--color-surface);
+}
 
 /* ── Comment composer modal ───────────────────────────────────────────── */
 
@@ -684,3 +733,54 @@ a:hover { text-decoration: underline; }
 .hidden { display: none !important; }
 
 .text-muted { color: var(--color-text-muted); }
+
+/* ── Mobile / narrow-viewport layout ──────────────────────────────────── */
+/* Buttons already wrap (.diagram-toolbar has flex-wrap), and .diagram-page
+   uses 100dvh so it fills the real visible area on phones. The remaining
+   fix needed at narrow widths is the comments sidebar: at its fixed 340px
+   width it would otherwise squeeze the diagram canvas down to nothing, so
+   below this breakpoint it becomes a full-width overlay instead. */
+@media (max-width: 720px) {
+  .diagram-toolbar {
+    padding: 8px 10px;
+  }
+  .diagram-toolbar .diagram-meta {
+    display: none;
+  }
+  .comments-panel {
+    position: absolute;
+    inset: 0;
+    left: auto;
+    width: 100%;
+    max-width: 100%;
+    z-index: 30;
+    border-left: none;
+    box-shadow: -6px 0 18px rgba(0,0,0,.18);
+  }
+
+  .page-header {
+    flex-wrap: wrap;
+  }
+  .app-logo {
+    width: 36px;
+    height: 36px;
+  }
+
+  /* Diagram list rows: 5 action buttons don't fit next to the title on a
+     phone-width screen, which forces the whole page wider than the
+     viewport. Stack the actions below the title and let them wrap. */
+  .diagram-list-item {
+    flex-wrap: wrap;
+  }
+  .diagram-list-item .item-title {
+    flex-basis: 100%;
+  }
+  .diagram-list-item .item-actions {
+    flex-wrap: wrap;
+    flex-basis: 100%;
+  }
+
+  .new-diagram-bar input[type="text"] {
+    min-width: 0;
+  }
+}
