@@ -289,6 +289,119 @@ class DiagramEmbed {
   }
 }
 
+// ── draw.io static GraphViewer controller (read-only, interactive) ──────────
+
+/**
+ * DiagramViewer — renders a diagram read-only using draw.io's static
+ * GraphViewer library (viewer-static.min.js), loaded from the self-hosted
+ * draw.io instance. Unlike DiagramEmbed, there is NO iframe and NO editing
+ * capability — the diagram is rendered directly into a `.mxgraph` div in the
+ * page. The `toolbar` option still gives interactive zoom, pan, and
+ * layer show/hide, matching draw.io's documented HTML embed pattern.
+ *
+ * @param {object} opts
+ * @param {HTMLElement} opts.container  — element the viewer renders into
+ * @param {string}      opts.diagramId
+ * @param {Function}    [opts.onReady]  — called once the diagram has rendered
+ */
+class DiagramViewer {
+  constructor(opts) {
+    this.container = opts.container;
+    this.diagramId = opts.diagramId;
+    this.onReady   = opts.onReady || (() => {});
+    this._base     = null;
+    this._mxDiv    = null;
+  }
+
+  /**
+   * Fetch the diagram XML (view mode — public, locked) and render it.
+   * Call once after constructing.
+   */
+  async load() {
+    const cfg  = await getConfig();
+    this._base = cfg.drawioEmbedUrl.replace(/\/$/, '');
+
+    const data = await this._fetchXml();
+    this._render(data);
+    await this._ensureViewerScript();
+    this.onReady();
+  }
+
+  async _fetchXml() {
+    const res = await fetch(`/api/diagrams/${this.diagramId}?mode=view`);
+    if (!res.ok) {
+      throw new Error(`Failed to load diagram (${res.status})`);
+    }
+    return res.json();
+  }
+
+  /** Build/replace the `.mxgraph` div that GraphViewer renders into. */
+  _render(data) {
+    this.container.innerHTML = '';
+    const div = document.createElement('div');
+    div.className = 'mxgraph';
+    div.setAttribute('style', 'max-width:100%;max-height:100%;');
+    // No `edit` key — omitting it means GraphViewer renders NO edit link/button,
+    // keeping this genuinely read-only. `toolbar` still gives zoom/pan/layers.
+    div.dataset.mxgraph = JSON.stringify({
+      highlight: '#0000ff',
+      nav:       true,
+      resize:    true,
+      toolbar:   'zoom layers lightbox',
+      xml:       data.xml,
+    });
+    this.container.appendChild(div);
+    this._mxDiv = div;
+  }
+
+  /**
+   * Load viewer-static.min.js from the self-hosted draw.io instance (once
+   * per page load) and trigger GraphViewer.processElements() to render any
+   * pending `.mxgraph` divs, including ones added after the initial load.
+   */
+  _ensureViewerScript() {
+    return new Promise((resolve) => {
+      if (window.GraphViewer) {
+        window.GraphViewer.processElements();
+        resolve();
+        return;
+      }
+      // onDrawioViewerLoad is the documented hook the script calls once ready.
+      window.onDrawioViewerLoad = () => {
+        window.GraphViewer.processElements();
+        resolve();
+      };
+      if (document.getElementById('drawio-viewer-script')) {
+        // Script tag already injected by a previous instance; the handler
+        // above will fire once it finishes loading.
+        return;
+      }
+      const script = document.createElement('script');
+      script.id  = 'drawio-viewer-script';
+      script.src = `${this._base}/js/viewer-static.min.js`;
+      document.body.appendChild(script);
+    });
+  }
+
+  /**
+   * Reload the XML from the server and re-render.
+   * Called when the "new changes" banner is clicked.
+   */
+  async refresh() {
+    const data = await this._fetchXml();
+    this._render(data);
+    if (window.GraphViewer) {
+      window.GraphViewer.processElements();
+    }
+  }
+
+  /** Clear the container (cleanup when switching to edit mode). */
+  destroy() {
+    this.container.innerHTML = '';
+    this._mxDiv = null;
+  }
+}
+
 // ── Polling helper ───────────────────────────────────────────────────────────
 
 /**

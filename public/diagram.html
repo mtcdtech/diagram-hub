@@ -37,13 +37,17 @@
     <button id="banner-dismiss" class="btn btn-sm" style="color:var(--color-text-muted)">✕</button>
   </div>
 
-  <!-- ── draw.io iframe wrapper ──────────────────────────────────────── -->
+  <!-- ── draw.io iframe / viewer wrapper ─────────────────────────────── -->
   <div class="iframe-wrapper">
     <div class="loading-overlay" id="loading-overlay">
       <div class="spinner"></div>
     </div>
+    <!-- View mode: read-only static viewer (zoom/pan/layers, no editing). -->
+    <div id="viewer-container" class="viewer-container hidden"></div>
+    <!-- Edit mode: full draw.io editor iframe. -->
     <iframe
       id="drawio-frame"
+      class="hidden"
       title="draw.io diagram editor"
       allow="clipboard-read; clipboard-write"
     ></iframe>
@@ -87,6 +91,7 @@
 
   // ── DOM refs ─────────────────────────────────────────────────────────────
   const iframe         = document.getElementById('drawio-frame');
+  const viewerContainer = document.getElementById('viewer-container');
   const titleEl        = document.getElementById('diagram-title');
   const metaEl         = document.getElementById('diagram-meta');
   const modeBadge      = document.getElementById('mode-badge');
@@ -140,12 +145,12 @@
     } catch { /* ignore */ }
 
     destroyEmbed();
-    embed = new DiagramEmbed({
-      iframe,
+    iframe.classList.add('hidden');
+    viewerContainer.classList.remove('hidden');
+    embed = new DiagramViewer({
+      container: viewerContainer,
       diagramId,
-      mode:       'view',
-      passphrase: '',
-      onReady:    () => { loadingOverlay.classList.add('hidden'); },
+      onReady: () => { loadingOverlay.classList.add('hidden'); },
     });
 
     loadingOverlay.classList.remove('hidden');
@@ -167,6 +172,8 @@
     editBtn.textContent = 'Switch to View';
 
     destroyEmbed();
+    viewerContainer.classList.add('hidden');
+    iframe.classList.remove('hidden');
     embed = new DiagramEmbed({
       iframe,
       diagramId,
