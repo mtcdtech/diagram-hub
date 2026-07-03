@@ -25,8 +25,14 @@ This workspace contains the `diagram-hub` project: a Node.js companion app for a
 - **Git Repository**: `https://github.com/mtcdtech/diagram-hub`
 - **Docker Registry**: Image is hosted on GitHub Container Registry at `ghcr.io/mtcdtech/diagram-hub`.
 - **CI/CD Workflow**: Triggers on push to `main` branch. GitHub Actions build and push the docker image tagged as `latest` and with the commit SHA.
+- **Deployment Script**: [deploy_draw.py](file:///Users/benny2168/Dockers/MTCD/docker-1/antigravity/mtcd-workspaces/draw%20diagram/deploy_draw.py) is used to automate build-push-redeploy pipeline. It triggers the update of Portainer Stack ID `99` using the short git commit SHA.
 - **Run command**:
   ```bash
   # Step 1: Commit and push changes
   git add . && git commit -m "commit message" && git push
+  # Step 2: Trigger Portainer stack update (wait for GitHub Actions image build to complete first)
+  python3 deploy_draw.py
   ```
+- **Target Server**: Synology NAS (`https://docker.server.mtcd.org`).
+- **Persistence**: Docker named volume `diagram_hub_data` mapped to `/data`.
+
