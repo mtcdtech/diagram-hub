@@ -45,7 +45,7 @@
       </div>
     </div>
     <footer class="app-footer" style="text-align: center; font-size: 0.75rem; color: var(--color-text-muted, #888); margin-top: 2rem; padding: 1rem 0; border-top: 1px solid var(--color-border, #eee);">
-      Diagram Hub v1.3.2
+      Diagram Hub v1.4.0
     </footer>
   </div>
 
@@ -81,7 +81,7 @@
       </ul>
     </div>
     <footer class="app-footer" style="text-align: center; font-size: 0.75rem; color: var(--color-text-muted, #888); margin-top: 2rem; padding: 1rem 0; border-top: 1px solid var(--color-border, #eee);">
-      Diagram Hub v1.3.2
+      Diagram Hub v1.4.0
     </footer>
   </div>
 
@@ -264,7 +264,7 @@
 
     if (action === 'edit') {
       // Navigate to the diagram page; it will use the cached passphrase.
-      window.location.href = `/d/${id}`;
+      window.location.href = `/d/${id}?mode=edit`;
     } else if (action === 'copy-link') {
       const url = `${window.location.origin}/d/${id}`;
       navigator.clipboard.writeText(url)
@@ -527,6 +527,8 @@
         pill.className = 'identity-pill';
         pill.innerHTML = `
           <span class="user-name">${escHtml(currentUser.name)}</span>
+          <span class="user-email" style="opacity: 0.7; font-size: 0.9em; border-left: 1px solid var(--color-border); padding-left: 8px; margin-left: 2px;">${escHtml(currentUser.email || '')}</span>
+          <span class="user-role" style="font-size: 0.85em; background: rgba(0,0,0,0.06); padding: 2px 6px; border-radius: 4px; text-transform: uppercase; font-weight: 500; margin-left: 2px;">${escHtml(currentUser.role || '')}</span>
           <button class="logout-btn" id="sso-logout-btn" title="Log out">✕</button>
         `;
         authControls.appendChild(pill);
