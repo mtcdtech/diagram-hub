@@ -226,13 +226,28 @@ function extractGroupsFromClaims(claims) {
 function resolveUserRole(groups) {
   const userGroups = (groups || []).map(g => g.trim().toLowerCase());
   
-  if (userGroups.includes('app_diagram-hub_admin')) {
+  if (
+    userGroups.includes('app_diagram-hub_admin') ||
+    userGroups.includes('app_diagram-hub_admins') ||
+    userGroups.includes('app-diagram-hub-admin') ||
+    userGroups.includes('app-diagram-hub-admins')
+  ) {
     return 'admin';
   }
-  if (userGroups.includes('app_diagram-hub_editor')) {
+  if (
+    userGroups.includes('app_diagram-hub_editor') ||
+    userGroups.includes('app_diagram-hub_editors') ||
+    userGroups.includes('app-diagram-hub-editor') ||
+    userGroups.includes('app-diagram-hub-editors')
+  ) {
     return 'editor';
   }
-  if (userGroups.includes('app_diagram-hub_commenter')) {
+  if (
+    userGroups.includes('app_diagram-hub_commenter') ||
+    userGroups.includes('app_diagram-hub_commenters') ||
+    userGroups.includes('app-diagram-hub-commenter') ||
+    userGroups.includes('app-diagram-hub-commenters')
+  ) {
     return 'commenter';
   }
   
@@ -251,8 +266,12 @@ function resolveUserRole(groups) {
     return 'commenter';
   }
   
-  // If we have no groups, deny access instead of returning commenter
-  return null;
+  // Fallback to configured default role if no groups match
+  const defaultRole = OIDC_DEFAULT_ROLE.trim().toLowerCase();
+  if (['admin', 'editor', 'commenter'].includes(defaultRole)) {
+    return defaultRole;
+  }
+  return 'commenter';
 }
 
 let cachedOidcMetadata = null;
@@ -524,7 +543,18 @@ app.get('/api/auth/sso/callback', async (req, res) => {
     const groups = extractGroupsFromClaims(claims);
     const role = resolveUserRole(groups);
     
+    console.log(`[SSO CALLBACK LOG] Login attempt:`);
+    console.log(`  - ms_email: "${msEmail}"`);
+    console.log(`  - email: "${primaryEmail}"`);
+    console.log(`  - resolved email: "${email}"`);
+    console.log(`  - name: "${name}"`);
+    console.log(`  - claims keys:`, Object.keys(claims));
+    console.log(`  - claims.groups:`, claims.groups || claims.roles || claims.group);
+    console.log(`  - extracted groups:`, groups);
+    console.log(`  - resolved role: "${role}"`);
+    
     if (!role) {
+      console.log(`[SSO CALLBACK LOG] Access Denied: resolved role is null.`);
       return res.status(403).send('Access Denied: You do not have permission groups assigned for Diagram Hub. Please contact your administrator.');
     }
     
