@@ -45,7 +45,7 @@
       </div>
     </div>
     <footer class="app-footer" style="text-align: center; font-size: 0.75rem; color: var(--color-text-muted, #888); margin-top: 2rem; padding: 1rem 0; border-top: 1px solid var(--color-border, #eee);">
-      Diagram Hub v1.4.0
+      Diagram Hub v1.4.1
     </footer>
   </div>
 
@@ -81,7 +81,7 @@
       </ul>
     </div>
     <footer class="app-footer" style="text-align: center; font-size: 0.75rem; color: var(--color-text-muted, #888); margin-top: 2rem; padding: 1rem 0; border-top: 1px solid var(--color-border, #eee);">
-      Diagram Hub v1.4.0
+      Diagram Hub v1.4.1
     </footer>
   </div>
 
@@ -113,6 +113,16 @@
     <div class="modal-actions">
       <button id="admin-modal-cancel" class="btn btn-secondary btn-sm">Cancel</button>
       <button id="admin-modal-submit" class="btn btn-primary btn-sm">Update Passphrase</button>
+    </div>
+    <div id="iam-admin-section" class="hidden" style="margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--color-border);">
+      <h4 style="margin: 0 0 0.75rem 0; font-size: 0.95rem; font-weight: 600;">IAM Integration (Admin Portal)</h4>
+      <div style="font-size: 0.8rem; background: var(--color-bg); padding: 12px; border-radius: 6px; border: 1px solid var(--color-border); margin-bottom: 1rem; line-height: 1.4;">
+        <div style="margin-bottom: 6px;"><strong>Roles API Endpoint:</strong> <code style="word-break: break-all;">https://draw.server.mtcd.org/api/iam/roles</code></div>
+        <div style="margin-bottom: 6px;"><strong>API Token:</strong> <code>ak_diagram_hub_iam_sync_token_2026</code></div>
+        <div><strong>Mapped Groups:</strong> <code>app-diagram-hub-[admins|editors|commenters]</code></div>
+      </div>
+      <button id="iam-sync-btn" class="btn btn-secondary btn-sm" style="width: 100%; justify-content: center;">Force Sync Roles to Authentik</button>
+      <span id="iam-sync-status" class="auth-error hidden" style="display: block; margin-top: 8px; font-size: 0.75rem; text-align: center;"></span>
     </div>
   </div>
 </div>
@@ -352,6 +362,19 @@
     adminModalError.classList.add('hidden');
     adminModal.classList.remove('hidden');
     adminNewPassphrase.focus();
+    
+    const iamAdminSection = document.getElementById('iam-admin-section');
+    const iamSyncStatus = document.getElementById('iam-sync-status');
+    if (iamAdminSection) {
+      if (currentUser && currentUser.role === 'admin') {
+        iamAdminSection.classList.remove('hidden');
+      } else {
+        iamAdminSection.classList.add('hidden');
+      }
+    }
+    if (iamSyncStatus) {
+      iamSyncStatus.classList.add('hidden');
+    }
   }
 
   function closeAdminModal() {
@@ -398,6 +421,34 @@
       if (e.key === 'Enter') submitAdminChange();
       if (e.key === 'Escape') closeAdminModal();
     });
+  });
+
+  const iamSyncBtn = document.getElementById('iam-sync-btn');
+  const iamSyncStatus = document.getElementById('iam-sync-status');
+
+  iamSyncBtn.addEventListener('click', async () => {
+    iamSyncBtn.disabled = true;
+    iamSyncStatus.classList.remove('hidden');
+    iamSyncStatus.style.color = '#888';
+    iamSyncStatus.textContent = 'Syncing roles in Admin Portal and pushing to Authentik...';
+    try {
+      const res = await fetch('/api/admin/iam/sync', {
+        method: 'POST'
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to sync.');
+      }
+      const data = await res.json();
+      iamSyncStatus.style.color = '#28a745';
+      iamSyncStatus.textContent = 'Sync completed successfully!';
+      showToast('Roles synced successfully!', 'success');
+    } catch (e) {
+      iamSyncStatus.style.color = '#dc3545';
+      iamSyncStatus.textContent = `Sync failed: ${e.message}`;
+    } finally {
+      iamSyncBtn.disabled = false;
+    }
   });
 
   // ── Diagram passphrase (set/change/remove per-diagram passphrase) ─────────

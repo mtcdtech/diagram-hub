@@ -798,6 +798,37 @@ app.post('/api/admin/change-passphrase', requireAdminAccess, (req, res) => {
   return res.json({ ok: true });
 });
 
+// POST /api/admin/iam/sync — force trigger role synchronization on Admin Portal
+app.post('/api/admin/iam/sync', requireAdminAccess, async (req, res) => {
+  try {
+    const adminPortalUrl = 'https://admin.server.mtcd.org';
+    const syncUrl = `${adminPortalUrl}/iam/api/webapps/diagram-hub/sync-token`;
+    const apiToken = process.env.ADMIN_PORTAL_API_TOKEN || 'ak_diagram_hub_iam_sync_token_2026';
+    
+    console.log(`[IAM SYNC] Triggering roles sync on Admin Portal at ${syncUrl}`);
+    const response = await fetch(syncUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiToken}`,
+        'Content-Type': 'application/json'
+      }
+    });
+    
+    if (!response.ok) {
+      const errText = await response.text();
+      console.error(`[IAM SYNC] Admin Portal sync failed: ${response.status} ${errText}`);
+      return res.status(response.status).json({ error: `Admin Portal sync failed: ${errText}` });
+    }
+    
+    const result = await response.json();
+    console.log(`[IAM SYNC] Sync completed successfully:`, result);
+    return res.json({ ok: true, result });
+  } catch (e) {
+    console.error(`[IAM SYNC] Sync error:`, e);
+    return res.status(500).json({ error: e.message });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // GET /api/diagrams/:id/meta — lightweight public poll endpoint
 // ---------------------------------------------------------------------------

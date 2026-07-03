@@ -17,6 +17,7 @@ This workspace contains the `diagram-hub` project: a Node.js companion app for a
 - **Concurrent-Edit Banner**: Light polling loop that compares diagram metadata and warns users when someone else has saved a newer version.
 
 ## Version History
+- **v1.4.1**: Added IAM Integration Settings section to admin panel with a "Force Sync" button, and implemented direct trigger endpoint calling the Admin Portal.
 - **v1.4.0**: Added email and role details to identity pills, configured auto-opening of comment sidebar upon placing new comments, and bypassed the passphrase gate automatically for SSO admins and editors.
 - **v1.3.2**: Fixed OIDC group names mapping (supports both dashes and underscores), restored the default fallback role mapping (commenter) so users can log in even before groups are linked, and added sso callback diagnostics.
 - **v1.3.1**: Implemented `/api/iam/roles` IAM sync endpoint, prioritized `ms_email` display username per Display Rule, and denied access to users without mapped role groups.
