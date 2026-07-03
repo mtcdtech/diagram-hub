@@ -512,9 +512,11 @@ class DiagramViewer {
     const rect      = this.graph.container.getBoundingClientRect();
     const scale     = this.graph.view.scale;
     const translate = this.graph.view.translate;
+    const scrollLeft = this.graph.container.scrollLeft || 0;
+    const scrollTop  = this.graph.container.scrollTop || 0;
     return {
-      x: (clientX - rect.left) / scale - translate.x,
-      y: (clientY - rect.top)  / scale - translate.y,
+      x: (clientX - rect.left + scrollLeft) / scale - translate.x,
+      y: (clientY - rect.top  + scrollTop)  / scale - translate.y,
     };
   }
 
@@ -527,9 +529,11 @@ class DiagramViewer {
     const rect      = this.graph.container.getBoundingClientRect();
     const scale     = this.graph.view.scale;
     const translate = this.graph.view.translate;
+    const scrollLeft = this.graph.container.scrollLeft || 0;
+    const scrollTop  = this.graph.container.scrollTop || 0;
     return {
-      x: rect.left + (graphX + translate.x) * scale,
-      y: rect.top  + (graphY + translate.y) * scale,
+      x: rect.left + (graphX + translate.x) * scale - scrollLeft,
+      y: rect.top  + (graphY + translate.y) * scale - scrollTop,
     };
   }
 
@@ -543,14 +547,55 @@ class DiagramViewer {
   watchViewChanges(onChange, intervalMs = 150) {
     let last = null;
     const tick = () => {
-      if (!this.graph || !this.graph.view) return;
+      if (!this.graph || !this.graph.view || !this.graph.container) return;
       const { scale, translate } = this.graph.view;
-      const key = `${scale}|${translate.x}|${translate.y}`;
+      const scrollLeft = this.graph.container.scrollLeft || 0;
+      const scrollTop = this.graph.container.scrollTop || 0;
+      const key = `${scale}|${translate.x}|${translate.y}|${scrollLeft}|${scrollTop}`;
       if (last !== null && key !== last) onChange();
       last = key;
     };
+
+    const cleanups = [];
+
+    // Set up immediate event listeners if mxGraph is loaded
+    if (this.graph && this.graph.view && this.graph.view.addListener) {
+      const view = this.graph.view;
+      const mxEvent = window.mxEvent;
+      if (mxEvent) {
+        const events = [
+          mxEvent.SCALE,
+          mxEvent.TRANSLATE,
+          mxEvent.SCALE_AND_TRANSLATE
+        ].filter(Boolean);
+        events.forEach(evtName => {
+          view.addListener(evtName, tick);
+          cleanups.push(() => {
+            try {
+              view.removeListener(tick, evtName);
+            } catch (e) {}
+          });
+        });
+      }
+    }
+
+    // Scroll events on the container itself also affect positioning
+    if (this.graph && this.graph.container) {
+      const scrollListener = () => tick();
+      this.graph.container.addEventListener('scroll', scrollListener);
+      cleanups.push(() => this.graph.container.removeEventListener('scroll', scrollListener));
+    }
+
+    // Window resize also affects bounding box offsets
+    window.addEventListener('resize', onChange);
+    cleanups.push(() => window.removeEventListener('resize', onChange));
+
     const handle = setInterval(tick, intervalMs);
-    return () => clearInterval(handle);
+    cleanups.push(() => clearInterval(handle));
+
+    return () => {
+      cleanups.forEach(fn => fn());
+    };
   }
 }
 

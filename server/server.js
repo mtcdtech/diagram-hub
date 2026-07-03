@@ -481,15 +481,12 @@ app.get('/api/diagrams/:id/comments', (req, res) => {
   return res.json(comments.map(c => serializeComment(c, replyStmt.all(c.id))));
 });
 
-// POST /api/diagrams/:id/comments — create a new thread (diagram passphrase gate)
+// POST /api/diagrams/:id/comments — create a new thread (public)
 app.post('/api/diagrams/:id/comments', (req, res) => {
   const { id } = req.params;
   const diagram = getDiagramRow(id);
   if (!diagram) {
     return res.status(404).json({ error: 'Diagram not found.' });
-  }
-  if (!diagramPassphraseValid(diagram, req.headers['x-edit-passphrase'] || '')) {
-    return res.status(401).json({ error: 'Invalid or missing passphrase.' });
   }
 
   const { x, y, priority } = req.body;
@@ -513,15 +510,12 @@ app.post('/api/diagrams/:id/comments', (req, res) => {
   return res.status(201).json(serializeComment(row, []));
 });
 
-// POST /api/diagrams/:id/comments/:commentId/replies — reply to a thread (diagram passphrase gate)
+// POST /api/diagrams/:id/comments/:commentId/replies — reply to a thread (public)
 app.post('/api/diagrams/:id/comments/:commentId/replies', (req, res) => {
   const { id, commentId } = req.params;
   const diagram = getDiagramRow(id);
   if (!diagram) {
     return res.status(404).json({ error: 'Diagram not found.' });
-  }
-  if (!diagramPassphraseValid(diagram, req.headers['x-edit-passphrase'] || '')) {
-    return res.status(401).json({ error: 'Invalid or missing passphrase.' });
   }
 
   const comment = db.prepare('SELECT * FROM comments WHERE id = ? AND diagram_id = ?').get(commentId, id);
@@ -545,18 +539,12 @@ app.post('/api/diagrams/:id/comments/:commentId/replies', (req, res) => {
   return res.status(201).json(serializeComment(comment, replies));
 });
 
-// PATCH /api/diagrams/:id/comments/:commentId — update priority and/or x/y position
-// (diagram passphrase gate). Accepts any combination of `priority` and
-// `x`+`y` in the body; only the fields provided are updated. Moving a
-// comment's anchor point (dragging its dot) requires BOTH x and y together.
+// PATCH /api/diagrams/:id/comments/:commentId — update priority and/or x/y position (public)
 app.patch('/api/diagrams/:id/comments/:commentId', (req, res) => {
   const { id, commentId } = req.params;
   const diagram = getDiagramRow(id);
   if (!diagram) {
     return res.status(404).json({ error: 'Diagram not found.' });
-  }
-  if (!diagramPassphraseValid(diagram, req.headers['x-edit-passphrase'] || '')) {
-    return res.status(401).json({ error: 'Invalid or missing passphrase.' });
   }
 
   const comment = db.prepare('SELECT * FROM comments WHERE id = ? AND diagram_id = ?').get(commentId, id);

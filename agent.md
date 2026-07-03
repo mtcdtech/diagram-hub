@@ -1,0 +1,32 @@
+# Diagram Hub Workspace
+
+This workspace contains the `diagram-hub` project: a Node.js companion app for a self-hosted `draw.io` instance, adding server-side persistence, public sharing, and passphrase-gated editing.
+
+## Tech Stack
+- **Frontend**: Vanilla HTML, CSS, JavaScript (using raw DOM, custom CSS, `DiagramEmbed` class, API polling helper). No frontend frameworks.
+- **Backend**: Node.js + Express.
+- **Database**: SQLite (using `better-sqlite3`, auto-migrated schema, WAL mode enabled).
+- **Authentication**: Passphrase-gated dashboard/editing via `EDIT_PASSPHRASE` environment variable. Cryptographically secure timing-safe passphrase comparisons.
+- **Iframe Integration**: Communication with draw.io via standard `postMessage` protocol (Embed Mode: `?embed=1&proto=json`).
+
+## Core Features
+- **Dashboard**: Edit-passphrase gated access to view list, create, edit, share, delete, and secure diagrams.
+- **Per-Diagram Passphrase**: Ability to assign a custom passphrase to a specific diagram so it can be edited without the master shared passphrase.
+- **Auto-Saving**: Continuous auto-saving from draw.io editor iframe pushed directly to SQLite.
+- **View-Mode Locking**: Injects `locked="1"` onto root layer cells to prevent unauthorized drag/drop/modification while viewing.
+- **Concurrent-Edit Banner**: Light polling loop that compares diagram metadata and warns users when someone else has saved a newer version.
+
+## Version History
+- **v1.1.0**: Removed passphrase gate for adding/replying/updating/positioning comments; fixed comments dot drifting by tracking scroll offsets and subscribing to mxGraph view changes.
+- **v1.0.0**: Initial workspace setup and repository clone.
+
+
+## CI/CD and Deployment
+- **Git Repository**: `https://github.com/mtcdtech/diagram-hub`
+- **Docker Registry**: Image is hosted on GitHub Container Registry at `ghcr.io/mtcdtech/diagram-hub`.
+- **CI/CD Workflow**: Triggers on push to `main` branch. GitHub Actions build and push the docker image tagged as `latest` and with the commit SHA.
+- **Run command**:
+  ```bash
+  # Step 1: Commit and push changes
+  git add . && git commit -m "commit message" && git push
+  ```

@@ -26,6 +26,7 @@
 
     <!-- Mode badge: VIEW or EDIT -->
     <span class="mode-badge" id="mode-badge">VIEW</span>
+    <span class="app-version" style="font-size:0.7rem; color:var(--color-text-muted); margin-left:0.5rem; align-self:center;">v1.1.0</span>
 
     <!-- Action buttons -->
     <button id="add-comment-btn"      class="btn btn-secondary btn-sm">+ Comment</button>
@@ -716,8 +717,10 @@
       if (!authorName) { showToast('Name is required.', 'error'); return; }
     }
 
-    withEditPermission(async (passphrase) => {
+    (async () => {
       try {
+        const resolved = resolveEditPassphrase(diagramId);
+        const passphrase = resolved ? resolved.passphrase : '';
         const updated = await apiReplyComment(diagramId, commentId, { authorName, body }, passphrase);
         if (!cachedName) setCachedCommenterName(authorName);
         applyCommentUpdate(updated);
@@ -726,12 +729,14 @@
       } catch (e) {
         showToast(`Could not post reply: ${e.message}`, 'error');
       }
-    });
+    })();
   }
 
   function changePriority(commentId, newPriority) {
-    withEditPermission(async (passphrase) => {
+    (async () => {
       try {
+        const resolved = resolveEditPassphrase(diagramId);
+        const passphrase = resolved ? resolved.passphrase : '';
         const updated = await apiUpdateCommentPriority(diagramId, commentId, newPriority, passphrase);
         applyCommentUpdate(updated);
         renderComments();
@@ -740,7 +745,7 @@
         showToast(`Could not update priority: ${e.message}`, 'error');
         renderComments(); // revert the <select> to the last known value
       }
-    });
+    })();
   }
 
   async function attemptResolve(commentId, resolved, passphrase) {
@@ -807,7 +812,7 @@
   addCommentBtn.addEventListener('click', () => {
     if (commentModeArmed) { disarmCommentMode(); return; }
     if (!embed) { showToast('Diagram not ready yet.', 'error'); return; }
-    withEditPermission(() => armCommentMode());
+    armCommentMode();
   });
 
   function captureClickPoint(evt) {
@@ -995,7 +1000,9 @@
       const point = embed.screenToGraphPoint(upEvt.clientX, upEvt.clientY);
       if (!point) { renderDots(); return; }
 
-      withEditPermission((passphrase) => persistDotMove(comment.id, point, passphrase));
+      const resolved = resolveEditPassphrase(diagramId);
+      const passphrase = resolved ? resolved.passphrase : '';
+      persistDotMove(comment.id, point, passphrase);
     }
 
     function onCancel() {
