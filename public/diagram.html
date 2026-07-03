@@ -26,7 +26,7 @@
 
     <!-- Mode badge: VIEW or EDIT -->
     <span class="mode-badge" id="mode-badge">VIEW</span>
-    <span class="app-version" style="font-size:0.7rem; color:var(--color-text-muted); margin-left:0.5rem; align-self:center;">v1.2.0</span>
+    <span class="app-version" style="font-size:0.7rem; color:var(--color-text-muted); margin-left:0.5rem; align-self:center;">v1.3.0</span>
     <div id="auth-controls" style="display:flex; align-items:center; margin-left:8px; margin-right:8px;"></div>
 
     <!-- Action buttons -->
@@ -620,7 +620,8 @@
       </div>
     `).join('');
 
-    const nameFieldHtml = cachedName
+    const hasName = (currentUser && currentUser.name) || cachedName;
+    const nameFieldHtml = hasName
       ? ''
       : `<input type="text" class="reply-name-input" placeholder="Your name…" maxlength="60" />`;
 
@@ -652,6 +653,13 @@
           <button class="btn ${isResolved ? 'btn-secondary' : 'btn-primary'} btn-sm resolve-toggle-btn">
             ${isResolved ? 'Reopen' : 'Resolve'}
           </button>
+        </div>
+        <div class="comment-delete-confirm hidden" style="margin-top: 10px; padding: 8px; background: var(--color-warning-bg); border: 1px solid var(--color-warning-bd); border-radius: 4px; display: flex; align-items: center; justify-content: space-between; gap: 10px;">
+          <span style="font-size: 12px; color: var(--color-text); font-weight: 500;">Delete this thread?</span>
+          <div style="display: flex; gap: 6px;">
+            <button class="btn btn-danger btn-sm confirm-delete-yes-btn" style="padding: 2px 8px; font-size: 11px;">Yes</button>
+            <button class="btn btn-secondary btn-sm confirm-delete-cancel-btn" style="padding: 2px 8px; font-size: 11px;">Cancel</button>
+          </div>
         </div>
       </div>
     `;
@@ -691,11 +699,24 @@
     const deleteBtn = evt.target.closest('.delete-comment-btn');
     if (deleteBtn) {
       const card = deleteBtn.closest('.comment-thread');
+      card.querySelector('.comment-thread-actions').classList.add('hidden');
+      card.querySelector('.comment-delete-confirm').classList.remove('hidden');
+      return;
+    }
+    const cancelDeleteBtn = evt.target.closest('.confirm-delete-cancel-btn');
+    if (cancelDeleteBtn) {
+      const card = cancelDeleteBtn.closest('.comment-thread');
+      card.querySelector('.comment-thread-actions').classList.remove('hidden');
+      card.querySelector('.comment-delete-confirm').classList.add('hidden');
+      return;
+    }
+    const yesDeleteBtn = evt.target.closest('.confirm-delete-yes-btn');
+    if (yesDeleteBtn) {
+      const card = yesDeleteBtn.closest('.comment-thread');
       const commentId = card.dataset.commentId;
       const comment = comments.find((c) => c.id === commentId);
       const isAuthor = comment && currentUser && comment.authorId === currentUser.author_id;
 
-      if (!confirm('Delete this comment thread? This cannot be undone.')) return;
       if (isAuthor) {
         attemptDeleteComment(commentId, '');
       } else {
@@ -717,12 +738,17 @@
     const body = bodyInput.value.trim();
     if (!body) { showToast('Reply text is required.', 'error'); return; }
 
-    const cachedName = getCachedCommenterName();
-    let authorName = cachedName;
-    if (!authorName) {
-      const nameInput = card.querySelector('.reply-name-input');
-      authorName = nameInput ? nameInput.value.trim() : '';
-      if (!authorName) { showToast('Name is required.', 'error'); return; }
+    let authorName = '';
+    if (currentUser && currentUser.name) {
+      authorName = currentUser.name;
+    } else {
+      const cachedName = getCachedCommenterName();
+      authorName = cachedName;
+      if (!authorName) {
+        const nameInput = card.querySelector('.reply-name-input');
+        authorName = nameInput ? nameInput.value.trim() : '';
+        if (!authorName) { showToast('Name is required.', 'error'); return; }
+      }
     }
 
     (async () => {
@@ -730,7 +756,10 @@
         const resolved = resolveEditPassphrase(diagramId);
         const passphrase = resolved ? resolved.passphrase : '';
         const updated = await apiReplyComment(diagramId, commentId, { authorName, body }, passphrase);
-        if (!cachedName) setCachedCommenterName(authorName);
+        if (!currentUser || !currentUser.name) {
+          const cachedName = getCachedCommenterName();
+          if (!cachedName) setCachedCommenterName(authorName);
+        }
         applyCommentUpdate(updated);
         renderComments();
         showToast('Reply posted.', 'success');
@@ -850,9 +879,9 @@
 
   function openCommentComposer(point) {
     pendingCommentPoint = point;
-    const cachedName = getCachedCommenterName();
+    const cachedName = (currentUser && currentUser.name) || getCachedCommenterName();
     commentComposerNameRow.classList.toggle('hidden', !!cachedName);
-    commentComposerName.value = '';
+    commentComposerName.value = (currentUser && currentUser.name) || '';
     commentComposerPriority.value = 'medium';
     commentComposerBody.value = '';
     commentComposerError.classList.add('hidden');
@@ -880,11 +909,16 @@
     const body = commentComposerBody.value.trim();
     if (!body) { showComposerError('Comment text is required.'); return; }
 
-    const cachedName = getCachedCommenterName();
-    let authorName = cachedName;
-    if (!authorName) {
-      authorName = commentComposerName.value.trim();
-      if (!authorName) { showComposerError('Name is required.'); return; }
+    let authorName = '';
+    if (currentUser && currentUser.name) {
+      authorName = currentUser.name;
+    } else {
+      const cachedName = getCachedCommenterName();
+      authorName = cachedName;
+      if (!authorName) {
+        authorName = commentComposerName.value.trim();
+        if (!authorName) { showComposerError('Name is required.'); return; }
+      }
     }
 
     const priority = commentComposerPriority.value;
@@ -898,7 +932,10 @@
       const created = await apiCreateComment(diagramId, {
         x: point.x, y: point.y, priority, authorName, body,
       }, passphrase);
-      if (!cachedName) setCachedCommenterName(authorName);
+      if (!currentUser || !currentUser.name) {
+        const cachedName = getCachedCommenterName();
+        if (!cachedName) setCachedCommenterName(authorName);
+      }
       applyCommentUpdate(created);
       closeCommentComposer();
       renderComments();

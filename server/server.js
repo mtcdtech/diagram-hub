@@ -124,6 +124,21 @@ function requireHubAccess(req, res, next) {
 }
 
 /**
+ * Express middleware that checks if the requester is authenticated as an admin
+ * via SSO OR provides the master passphrase. Used for admin-level operations.
+ */
+function requireAdminAccess(req, res, next) {
+  if (req.user && req.user.role === 'admin') {
+    return next();
+  }
+  const provided = req.headers['x-edit-passphrase'] || '';
+  if (!passphraseValid(provided)) {
+    return res.status(401).json({ error: 'Invalid or missing passphrase.' });
+  }
+  next();
+}
+
+/**
  * A diagram can optionally have its own passphrase (set from the hub
  * dashboard), granting edit access to just that diagram without needing the
  * shared/master passphrase. The shared passphrase always continues to work
@@ -178,6 +193,59 @@ const OIDC_CLIENT_SECRET = process.env.OIDC_CLIENT_SECRET;
 const APP_URL = process.env.APP_URL;
 
 const isOidcConfigured = !!(OIDC_ISSUER_URL && OIDC_CLIENT_ID && OIDC_CLIENT_SECRET && APP_URL);
+
+const OIDC_ADMIN_GROUPS = process.env.OIDC_ADMIN_GROUPS || 'diagram-hub-admins';
+const OIDC_EDITOR_GROUPS = process.env.OIDC_EDITOR_GROUPS || 'diagram-hub-editors';
+const OIDC_COMMENTER_GROUPS = process.env.OIDC_COMMENTER_GROUPS || 'diagram-hub-commenters';
+const OIDC_DEFAULT_ROLE = process.env.OIDC_DEFAULT_ROLE || 'commenter';
+
+function parseGroupList(val) {
+  if (!val) return [];
+  return val.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+}
+
+function extractGroupsFromClaims(claims) {
+  if (!claims) return [];
+  const candidates = [claims.groups, claims.roles, claims.group, claims["cognito:groups"]];
+  const out = new Set();
+  for (const value of candidates) {
+    if (!value) continue;
+    if (Array.isArray(value)) {
+      for (const v of value) {
+        if (typeof v === "string" && v.trim()) out.add(v.trim());
+      }
+    } else if (typeof value === "string") {
+      for (const v of value.split(/[,\s]+/)) {
+        if (v.trim()) out.add(v.trim());
+      }
+    }
+  }
+  return Array.from(out);
+}
+
+function resolveUserRole(groups) {
+  const adminGroups = parseGroupList(OIDC_ADMIN_GROUPS);
+  const editorGroups = parseGroupList(OIDC_EDITOR_GROUPS);
+  const commenterGroups = parseGroupList(OIDC_COMMENTER_GROUPS);
+  
+  const userGroups = (groups || []).map(g => g.trim().toLowerCase());
+  
+  if (userGroups.some(g => adminGroups.includes(g))) {
+    return 'admin';
+  }
+  if (userGroups.some(g => editorGroups.includes(g))) {
+    return 'editor';
+  }
+  if (userGroups.some(g => commenterGroups.includes(g))) {
+    return 'commenter';
+  }
+  
+  const defaultRole = OIDC_DEFAULT_ROLE.trim().toLowerCase();
+  if (['admin', 'editor', 'commenter'].includes(defaultRole)) {
+    return defaultRole;
+  }
+  return 'commenter';
+}
 
 let cachedOidcMetadata = null;
 let cachedOidcIssuer = '';
@@ -240,12 +308,13 @@ function attachUserIdentity(req, res, next) {
   let user = null;
   const sid = getCookie(req, 'diagram_hub_sid');
   if (sid) {
-    const session = db.prepare('SELECT user_email, user_name FROM sessions WHERE sid = ?').get(sid);
+    const session = db.prepare('SELECT user_email, user_name, user_role FROM sessions WHERE sid = ?').get(sid);
     if (session) {
       user = {
         type: 'sso',
         email: session.user_email,
         name: session.user_name,
+        role: session.user_role || 'commenter',
         author_id: session.user_email
       };
     }
@@ -259,6 +328,7 @@ function attachUserIdentity(req, res, next) {
     }
     user = {
       type: 'guest',
+      role: 'commenter',
       author_id: guestId
     };
   }
@@ -310,6 +380,7 @@ app.get('/api/auth/me', (req, res) => {
       user: {
         email: req.user.email,
         name: req.user.name,
+        role: req.user.role,
         author_id: req.user.author_id
       },
       oidcAvailable: isOidcConfigured
@@ -318,7 +389,8 @@ app.get('/api/auth/me', (req, res) => {
   return res.json({
     loggedIn: false,
     user: {
-      author_id: req.user ? req.user.author_id : null
+      author_id: req.user ? req.user.author_id : null,
+      role: 'commenter'
     },
     oidcAvailable: isOidcConfigured
   });
@@ -402,9 +474,13 @@ app.get('/api/auth/sso/callback', async (req, res) => {
       return res.status(400).send('SSO claims did not contain email.');
     }
     
+    // Extract groups and resolve user role
+    const groups = extractGroupsFromClaims(claims);
+    const role = resolveUserRole(groups);
+    
     // Generate session
     const sid = crypto.randomBytes(24).toString('hex');
-    db.prepare('INSERT INTO sessions (sid, user_email, user_name, created_at) VALUES (?, ?, ?, ?)').run(sid, email, name, Date.now());
+    db.prepare('INSERT INTO sessions (sid, user_email, user_name, user_role, created_at) VALUES (?, ?, ?, ?, ?)').run(sid, email, name, role, Date.now());
     
     // Save session cookie for 14 days
     setCookie(res, 'diagram_hub_sid', sid, 14 * 24 * 60 * 60);
@@ -456,6 +532,13 @@ app.get('/api/config', (_req, res) => {
 // ---------------------------------------------------------------------------
 
 app.post('/api/diagrams', requireHubAccess, (req, res) => {
+  const providedPass = req.headers['x-edit-passphrase'] || '';
+  const isAdminPass = passphraseValid(providedPass);
+  const hasEditRole = req.user && (req.user.role === 'admin' || req.user.role === 'editor');
+  if (!isAdminPass && !hasEditRole) {
+    return res.status(403).json({ error: 'You are not authorized to create diagrams.' });
+  }
+
   const { title } = req.body;
   if (!title || typeof title !== 'string' || title.trim().length === 0) {
     return res.status(400).json({ error: 'title is required.' });
@@ -505,9 +588,11 @@ app.get('/api/diagrams/:id', (req, res) => {
   }
 
   if (mode === 'edit') {
-    // Edit mode: passphrase gate. The shared/master passphrase always works;
-    // a diagram's own passphrase (if set) also grants access to it alone.
-    if (!diagramPassphraseValid(row, req.headers['x-edit-passphrase'] || '')) {
+    // Edit mode: passphrase or SSO role gate.
+    const providedPass = req.headers['x-edit-passphrase'] || '';
+    const isAuthorized = diagramPassphraseValid(row, providedPass) || 
+                         (req.user && (req.user.role === 'admin' || req.user.role === 'editor'));
+    if (!isAuthorized) {
       return res.status(401).json({ error: 'Invalid or missing passphrase.' });
     }
   }
@@ -540,8 +625,11 @@ app.put('/api/diagrams/:id', (req, res) => {
   }
 
   // Shared/master passphrase always works; a diagram's own passphrase (if
-  // set) also grants access to save just that diagram.
-  if (!diagramPassphraseValid(row, req.headers['x-edit-passphrase'] || '')) {
+  // set) also grants access to save just that diagram. OIDC admin/editor roles also grant edit.
+  const providedPass = req.headers['x-edit-passphrase'] || '';
+  const isAuthorized = diagramPassphraseValid(row, providedPass) || 
+                       (req.user && (req.user.role === 'admin' || req.user.role === 'editor'));
+  if (!isAuthorized) {
     return res.status(401).json({ error: 'Invalid or missing passphrase.' });
   }
 
@@ -567,7 +655,7 @@ app.put('/api/diagrams/:id', (req, res) => {
 // leaving it protected only by the shared passphrase.
 // ---------------------------------------------------------------------------
 
-app.put('/api/diagrams/:id/passphrase', requirePassphrase, (req, res) => {
+app.put('/api/diagrams/:id/passphrase', requireAdminAccess, (req, res) => {
   const { id } = req.params;
   const { passphrase } = req.body;
 
@@ -592,7 +680,7 @@ app.put('/api/diagrams/:id/passphrase', requirePassphrase, (req, res) => {
 // DELETE /api/diagrams/:id — permanently delete a diagram (passphrase required)
 // ---------------------------------------------------------------------------
 
-app.delete('/api/diagrams/:id', requirePassphrase, (req, res) => {
+app.delete('/api/diagrams/:id', requireAdminAccess, (req, res) => {
   const { id } = req.params;
 
   const row = db.prepare('SELECT id FROM diagrams WHERE id = ?').get(id);
@@ -619,7 +707,7 @@ app.delete('/api/diagrams/:id', requirePassphrase, (req, res) => {
 // requirePassphrase) and a new passphrase in the request body.
 // ---------------------------------------------------------------------------
 
-app.post('/api/admin/change-passphrase', requirePassphrase, (req, res) => {
+app.post('/api/admin/change-passphrase', requireAdminAccess, (req, res) => {
   const { newPassphrase } = req.body;
 
   if (!newPassphrase || typeof newPassphrase !== 'string' || newPassphrase.length < 8) {
@@ -858,7 +946,7 @@ app.delete('/api/diagrams/:id/comments/:commentId', (req, res) => {
 });
 
 // PATCH /api/diagrams/:id/comments/:commentId/resolve — resolve/reopen (MASTER passphrase only)
-app.patch('/api/diagrams/:id/comments/:commentId/resolve', requirePassphrase, (req, res) => {
+app.patch('/api/diagrams/:id/comments/:commentId/resolve', requireAdminAccess, (req, res) => {
   const { id, commentId } = req.params;
   const diagram = getDiagramRow(id);
   if (!diagram) {

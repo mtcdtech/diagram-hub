@@ -124,6 +124,21 @@ if (version < 5) {
   console.log('[db] Schema migrated to version 5');
 }
 
+if (version < 6) {
+  // Add role to sessions table to support Authentik roles mapping
+  try {
+    db.exec(`
+      ALTER TABLE sessions ADD COLUMN user_role TEXT NOT NULL DEFAULT 'commenter';
+    `);
+    db.pragma('user_version = 6');
+    console.log('[db] Schema migrated to version 6');
+  } catch (e) {
+    // If the column already exists (e.g. from manual changes), just bump the version.
+    db.pragma('user_version = 6');
+    console.log('[db] Schema version bumped to 6');
+  }
+}
+
 console.log(`[db] Database ready at ${DB_PATH}`);
 
 module.exports = db;
