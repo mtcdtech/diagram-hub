@@ -106,6 +106,25 @@ if (version < 4) {
   console.log('[db] Schema migrated to version 4');
 }
 
+if (version < 5) {
+  // Add author_id to comments/replies to allow creator-based deletion.
+  // Create sessions table for SSO session storage.
+  db.exec(`
+    ALTER TABLE comments ADD COLUMN author_id TEXT;
+    ALTER TABLE comment_replies ADD COLUMN author_id TEXT;
+    
+    CREATE TABLE IF NOT EXISTS sessions (
+      sid        TEXT PRIMARY KEY,
+      user_email TEXT NOT NULL,
+      user_name  TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+  `);
+  db.pragma('user_version = 5');
+  console.log('[db] Schema migrated to version 5');
+}
+
 console.log(`[db] Database ready at ${DB_PATH}`);
 
 module.exports = db;
+

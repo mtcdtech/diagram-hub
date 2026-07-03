@@ -17,8 +17,10 @@ This workspace contains the `diagram-hub` project: a Node.js companion app for a
 - **Concurrent-Edit Banner**: Light polling loop that compares diagram metadata and warns users when someone else has saved a newer version.
 
 ## Version History
+- **v1.2.0**: Added Authentik SSO OIDC authentication support, session storage in SQLite database, creator-based comment thread deletion ownership via commenter session cookies or SSO email accounts, and identity pill indicator components in headers.
 - **v1.1.0**: Removed passphrase gate for adding/replying/updating/positioning comments; fixed comments dot drifting by tracking scroll offsets and subscribing to mxGraph view changes.
 - **v1.0.0**: Initial workspace setup and repository clone.
+
 
 
 ## CI/CD and Deployment

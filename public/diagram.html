@@ -26,7 +26,8 @@
 
     <!-- Mode badge: VIEW or EDIT -->
     <span class="mode-badge" id="mode-badge">VIEW</span>
-    <span class="app-version" style="font-size:0.7rem; color:var(--color-text-muted); margin-left:0.5rem; align-self:center;">v1.1.0</span>
+    <span class="app-version" style="font-size:0.7rem; color:var(--color-text-muted); margin-left:0.5rem; align-self:center;">v1.2.0</span>
+    <div id="auth-controls" style="display:flex; align-items:center; margin-left:8px; margin-right:8px;"></div>
 
     <!-- Action buttons -->
     <button id="add-comment-btn"      class="btn btn-secondary btn-sm">+ Comment</button>
@@ -691,8 +692,15 @@
     if (deleteBtn) {
       const card = deleteBtn.closest('.comment-thread');
       const commentId = card.dataset.commentId;
+      const comment = comments.find((c) => c.id === commentId);
+      const isAuthor = comment && currentUser && comment.authorId === currentUser.author_id;
+
       if (!confirm('Delete this comment thread? This cannot be undone.')) return;
-      withAdminPermission((passphrase) => attemptDeleteComment(commentId, passphrase));
+      if (isAuthor) {
+        attemptDeleteComment(commentId, '');
+      } else {
+        withAdminPermission((passphrase) => attemptDeleteComment(commentId, passphrase));
+      }
       return;
     }
   });
@@ -1129,11 +1137,66 @@
     if (svg) svg.classList.remove('visible');
   }
 
+  // ── SSO & Session Checking ────────────────────────────────────────────────
+  let currentUser = null;
+  let oidcAvailable = false;
+
+  async function checkAuth() {
+    try {
+      const res = await fetch('/api/auth/me');
+      if (res.ok) {
+        const data = await res.json();
+        currentUser = data.user;
+        oidcAvailable = data.oidcAvailable;
+        updateAuthUI();
+      }
+    } catch (e) {
+      console.error('Failed to fetch auth state', e);
+    }
+  }
+
+  function updateAuthUI() {
+    const authControls = document.getElementById('auth-controls');
+    if (authControls) {
+      authControls.innerHTML = '';
+      if (currentUser && currentUser.name) {
+        const pill = document.createElement('div');
+        pill.className = 'identity-pill';
+        pill.innerHTML = `
+          <span class="user-name">${escapeHtml(currentUser.name)}</span>
+          <button class="logout-btn" id="sso-logout-btn" title="Log out">✕</button>
+        `;
+        authControls.appendChild(pill);
+        
+        const logoutBtn = pill.querySelector('#sso-logout-btn');
+        logoutBtn.addEventListener('click', async () => {
+          try {
+            const res = await fetch('/api/auth/logout', { method: 'POST' });
+            if (res.ok) {
+              clearCachedPassphrase();
+              location.reload();
+            }
+          } catch (e) {
+            showToast('Failed to log out.', 'error');
+          }
+        });
+      } else if (oidcAvailable) {
+        const loginBtn = document.createElement('a');
+        loginBtn.href = `/api/auth/sso/start?return_url=${encodeURIComponent(window.location.pathname)}`;
+        loginBtn.className = 'btn btn-secondary btn-sm sso-login-btn';
+        loginBtn.textContent = 'Login';
+        authControls.appendChild(loginBtn);
+      }
+    }
+  }
+
   // ── Bootstrap ────────────────────────────────────────────────────────────
 
   // Always start in view mode; the user can switch to edit via the button.
-  initView();
-  loadComments();
+  checkAuth().then(() => {
+    initView();
+    loadComments();
+  });
 </script>
 </body>
 </html>

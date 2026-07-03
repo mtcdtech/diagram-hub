@@ -797,3 +797,38 @@ a:hover { text-decoration: underline; }
     min-width: 0;
   }
 }
+
+/* ── Identity Pill & SSO Login ────────────────────────────────────────── */
+.identity-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--color-surface);
+  padding: 4px 12px;
+  border-radius: 16px;
+  font-size: 12px;
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+}
+.identity-pill .user-name {
+  font-weight: 600;
+}
+.identity-pill .logout-btn {
+  background: none;
+  border: none;
+  color: var(--color-danger);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 4px;
+  font-weight: 500;
+}
+.identity-pill .logout-btn:hover {
+  text-decoration: underline;
+}
+
+.sso-login-btn {
+  font-size: 12px;
+  padding: 4px 10px;
+}
+

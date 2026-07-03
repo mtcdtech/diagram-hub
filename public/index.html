@@ -39,9 +39,13 @@
         <button id="auth-submit" class="btn btn-primary">Unlock</button>
       </div>
       <span id="auth-error" class="auth-error hidden">Incorrect passphrase.</span>
+      <div id="sso-auth-container" class="hidden" style="margin-top: 1.5rem; text-align: center; border-top: 1px solid var(--color-border); padding-top: 1.5rem;">
+        <p style="font-size: 13px; color: var(--color-text-muted); margin-bottom: 0.75rem;">Or log in using single sign-on:</p>
+        <a id="sso-login-link" href="/api/auth/sso/start" class="btn btn-secondary" style="display: inline-block; width: 100%; box-sizing: border-box; text-align: center; text-decoration: none;">Login with Authentik</a>
+      </div>
     </div>
     <footer class="app-footer" style="text-align: center; font-size: 0.75rem; color: var(--color-text-muted, #888); margin-top: 2rem; padding: 1rem 0; border-top: 1px solid var(--color-border, #eee);">
-      Diagram Hub v1.1.0
+      Diagram Hub v1.2.0
     </footer>
   </div>
 
@@ -54,6 +58,7 @@
         <h1>Diagram Hub</h1>
         <p class="subtitle">Your diagrams</p>
       </div>
+      <div id="auth-controls" style="display:flex; align-items:center; margin-right:8px;"></div>
       <button id="admin-btn" class="btn btn-secondary btn-sm">Admin</button>
       <button id="logout-btn" class="btn btn-secondary btn-sm">Lock</button>
     </div>
@@ -76,7 +81,7 @@
       </ul>
     </div>
     <footer class="app-footer" style="text-align: center; font-size: 0.75rem; color: var(--color-text-muted, #888); margin-top: 2rem; padding: 1rem 0; border-top: 1px solid var(--color-border, #eee);">
-      Diagram Hub v1.1.0
+      Diagram Hub v1.2.0
     </footer>
   </div>
 
@@ -495,9 +500,80 @@
     });
   });
 
+  // ── SSO & Session Checking ────────────────────────────────────────────────
+  let currentUser = null;
+  let oidcAvailable = false;
+
+  async function checkAuth() {
+    try {
+      const res = await fetch('/api/auth/me');
+      if (res.ok) {
+        const data = await res.json();
+        currentUser = data.user;
+        oidcAvailable = data.oidcAvailable;
+        updateAuthUI();
+      }
+    } catch (e) {
+      console.error('Failed to fetch auth state', e);
+    }
+  }
+
+  function updateAuthUI() {
+    const authControls = document.getElementById('auth-controls');
+    if (authControls) {
+      authControls.innerHTML = '';
+      if (currentUser && currentUser.name) {
+        const pill = document.createElement('div');
+        pill.className = 'identity-pill';
+        pill.innerHTML = `
+          <span class="user-name">${escHtml(currentUser.name)}</span>
+          <button class="logout-btn" id="sso-logout-btn" title="Log out">✕</button>
+        `;
+        authControls.appendChild(pill);
+        
+        const logoutBtn = pill.querySelector('#sso-logout-btn');
+        logoutBtn.addEventListener('click', async () => {
+          try {
+            const res = await fetch('/api/auth/logout', { method: 'POST' });
+            if (res.ok) {
+              clearCachedPassphrase();
+              location.reload();
+            }
+          } catch (e) {
+            showToast('Failed to log out.', 'error');
+          }
+        });
+      } else if (oidcAvailable) {
+        const loginBtn = document.createElement('a');
+        loginBtn.href = `/api/auth/sso/start?return_url=${encodeURIComponent(window.location.pathname)}`;
+        loginBtn.className = 'btn btn-secondary btn-sm sso-login-btn';
+        loginBtn.textContent = 'Login';
+        authControls.appendChild(loginBtn);
+      }
+    }
+    
+    const ssoAuthContainer = document.getElementById('sso-auth-container');
+    if (ssoAuthContainer) {
+      ssoAuthContainer.classList.toggle('hidden', !oidcAvailable);
+    }
+  }
+
   // ── Bootstrap: check for a cached passphrase ─────────────────────────────
 
   (async function init() {
+    await checkAuth();
+
+    // If logged in via SSO, automatically show the dashboard
+    if (currentUser && currentUser.name) {
+      try {
+        const diagrams = await tryUnlock('');
+        showDashboard(diagrams);
+        return;
+      } catch (e) {
+        console.error('SSO unlock failed, falling back to passphrase', e);
+      }
+    }
+
     const cached = getCachedPassphrase();
     if (cached) {
       try {

@@ -109,6 +109,21 @@ function requirePassphrase(req, res, next) {
 }
 
 /**
+ * Express middleware that checks if the requester is authenticated via SSO
+ * OR provides the master passphrase. Used for dashboard diagram list & create.
+ */
+function requireHubAccess(req, res, next) {
+  if (req.user && req.user.type === 'sso') {
+    return next();
+  }
+  const provided = req.headers['x-edit-passphrase'] || '';
+  if (!passphraseValid(provided)) {
+    return res.status(401).json({ error: 'Invalid or missing passphrase.' });
+  }
+  next();
+}
+
+/**
  * A diagram can optionally have its own passphrase (set from the hub
  * dashboard), granting edit access to just that diagram without needing the
  * shared/master passphrase. The shared passphrase always continues to work
@@ -155,8 +170,104 @@ function applyViewLock(xml) {
 }
 
 // ---------------------------------------------------------------------------
-// Middleware
+// SSO & Session Management Configuration
 // ---------------------------------------------------------------------------
+const OIDC_ISSUER_URL = process.env.OIDC_ISSUER_URL;
+const OIDC_CLIENT_ID = process.env.OIDC_CLIENT_ID;
+const OIDC_CLIENT_SECRET = process.env.OIDC_CLIENT_SECRET;
+const APP_URL = process.env.APP_URL;
+
+const isOidcConfigured = !!(OIDC_ISSUER_URL && OIDC_CLIENT_ID && OIDC_CLIENT_SECRET && APP_URL);
+
+let cachedOidcMetadata = null;
+let cachedOidcIssuer = '';
+
+async function getOidcMetadata() {
+  if (cachedOidcMetadata && cachedOidcIssuer === OIDC_ISSUER_URL) {
+    return cachedOidcMetadata;
+  }
+  const discoverUrl = `${OIDC_ISSUER_URL.replace(/\/$/, '')}/.well-known/openid-configuration`;
+  const res = await fetch(discoverUrl);
+  if (!res.ok) {
+    throw new Error(`SSO discovery failed with status ${res.status}`);
+  }
+  const data = await res.json();
+  cachedOidcMetadata = data;
+  cachedOidcIssuer = OIDC_ISSUER_URL;
+  return data;
+}
+
+function decodeJwt(token) {
+  const parts = token.split('.');
+  if (parts.length < 2) return {};
+  const payload = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+  const padded = payload + '='.repeat((4 - (payload.length % 4)) % 4);
+  return JSON.parse(Buffer.from(padded, 'base64').toString('utf-8'));
+}
+
+function getCookie(req, name) {
+  const cookieHeader = req.headers.cookie;
+  if (!cookieHeader) return null;
+  const cookies = cookieHeader.split(';');
+  for (let cookie of cookies) {
+    const [cName, ...cVal] = cookie.split('=');
+    if (cName.trim() === name) {
+      return decodeURIComponent(cVal.join('='));
+    }
+  }
+  return null;
+}
+
+function setCookie(res, name, value, maxAgeSec) {
+  let cookieStr = `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax`;
+  if (maxAgeSec !== undefined) {
+    cookieStr += `; Max-Age=${maxAgeSec}`;
+  }
+  let existing = res.getHeader('Set-Cookie');
+  if (!existing) {
+    res.setHeader('Set-Cookie', [cookieStr]);
+  } else {
+    if (typeof existing === 'string') existing = [existing];
+    res.setHeader('Set-Cookie', [...existing, cookieStr]);
+  }
+}
+
+function clearCookie(res, name) {
+  setCookie(res, name, '', 0);
+}
+
+function attachUserIdentity(req, res, next) {
+  let user = null;
+  const sid = getCookie(req, 'diagram_hub_sid');
+  if (sid) {
+    const session = db.prepare('SELECT user_email, user_name FROM sessions WHERE sid = ?').get(sid);
+    if (session) {
+      user = {
+        type: 'sso',
+        email: session.user_email,
+        name: session.user_name,
+        author_id: session.user_email
+      };
+    }
+  }
+
+  if (!user) {
+    let guestId = getCookie(req, 'commenter_session');
+    if (!guestId) {
+      guestId = 'c_' + crypto.randomBytes(16).toString('hex');
+      setCookie(res, 'commenter_session', guestId, 365 * 24 * 60 * 60);
+    }
+    user = {
+      type: 'guest',
+      author_id: guestId
+    };
+  }
+
+  req.user = user;
+  next();
+}
+
+app.use(attachUserIdentity);
 
 app.use(express.json({ limit: '10mb' }));  // diagrams can be large SVG-heavy XML
 
@@ -188,6 +299,136 @@ function sendVersionedHtml(res, filePath) {
   res.type('html').send(html);
 }
 
+// ---------------------------------------------------------------------------
+// SSO Authentication Routes
+// ---------------------------------------------------------------------------
+
+app.get('/api/auth/me', (req, res) => {
+  if (req.user && req.user.type === 'sso') {
+    return res.json({
+      loggedIn: true,
+      user: {
+        email: req.user.email,
+        name: req.user.name,
+        author_id: req.user.author_id
+      },
+      oidcAvailable: isOidcConfigured
+    });
+  }
+  return res.json({
+    loggedIn: false,
+    user: {
+      author_id: req.user ? req.user.author_id : null
+    },
+    oidcAvailable: isOidcConfigured
+  });
+});
+
+app.get('/api/auth/sso/start', async (req, res) => {
+  if (!isOidcConfigured) {
+    return res.status(404).send('SSO not configured.');
+  }
+  try {
+    const metadata = await getOidcMetadata();
+    const state = crypto.randomBytes(24).toString('base64url');
+    const nonce = crypto.randomBytes(24).toString('base64url');
+    
+    // Save state & nonce in cookies for verification in callback
+    setCookie(res, 'sso_state', state, 300); // 5 mins
+    setCookie(res, 'sso_nonce', nonce, 300);
+    
+    const returnUrl = req.query.return_url || '/';
+    setCookie(res, 'sso_return_url', returnUrl, 300);
+    
+    const redirectUri = `${APP_URL.replace(/\/$/, '')}/api/auth/sso/callback`;
+    const params = new URLSearchParams({
+      response_type: 'code',
+      client_id: OIDC_CLIENT_ID,
+      redirect_uri: redirectUri,
+      scope: 'openid email profile',
+      state: state,
+      nonce: nonce
+    });
+    
+    res.redirect(`${metadata.authorization_endpoint}?${params.toString()}`);
+  } catch (err) {
+    res.status(500).send(`SSO Error: ${err.message}`);
+  }
+});
+
+app.get('/api/auth/sso/callback', async (req, res) => {
+  if (!isOidcConfigured) {
+    return res.status(404).send('SSO not configured.');
+  }
+  const code = req.query.code;
+  const state = req.query.state;
+  const cookieState = getCookie(req, 'sso_state');
+  
+  if (!code || !state) {
+    return res.status(400).send('Missing code or state parameters.');
+  }
+  if (!cookieState || state !== cookieState) {
+    return res.status(400).send('SSO State verification failed.');
+  }
+  
+  try {
+    const metadata = await getOidcMetadata();
+    const redirectUri = `${APP_URL.replace(/\/$/, '')}/api/auth/sso/callback`;
+    const tokenParams = new URLSearchParams({
+      grant_type: 'authorization_code',
+      code: code,
+      redirect_uri: redirectUri,
+      client_id: OIDC_CLIENT_ID,
+      client_secret: OIDC_CLIENT_SECRET
+    });
+    
+    const tokenRes = await fetch(metadata.token_endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: tokenParams.toString()
+    });
+    
+    if (!tokenRes.ok) {
+      const errorText = await tokenRes.text();
+      return res.status(401).send(`SSO Token Exchange failed: ${errorText}`);
+    }
+    
+    const tokenData = await tokenRes.json();
+    const claims = tokenData.id_token ? decodeJwt(tokenData.id_token) : {};
+    const email = (claims.email || '').toLowerCase();
+    const name = claims.name || claims.preferred_username || email;
+    
+    if (!email) {
+      return res.status(400).send('SSO claims did not contain email.');
+    }
+    
+    // Generate session
+    const sid = crypto.randomBytes(24).toString('hex');
+    db.prepare('INSERT INTO sessions (sid, user_email, user_name, created_at) VALUES (?, ?, ?, ?)').run(sid, email, name, Date.now());
+    
+    // Save session cookie for 14 days
+    setCookie(res, 'diagram_hub_sid', sid, 14 * 24 * 60 * 60);
+    clearCookie(res, 'sso_state');
+    clearCookie(res, 'sso_nonce');
+    
+    const returnUrl = getCookie(req, 'sso_return_url') || '/';
+    clearCookie(res, 'sso_return_url');
+    
+    res.redirect(returnUrl);
+  } catch (err) {
+    res.status(500).send(`SSO Callback Error: ${err.message}`);
+  }
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  const sid = getCookie(req, 'diagram_hub_sid');
+  if (sid) {
+    db.prepare('DELETE FROM sessions WHERE sid = ?').run(sid);
+  }
+  clearCookie(res, 'diagram_hub_sid');
+  res.json({ success: true });
+});
+
 app.get('/', (_req, res) => {
   sendVersionedHtml(res, path.join(__dirname, '..', 'public', 'index.html'));
 });
@@ -214,7 +455,7 @@ app.get('/api/config', (_req, res) => {
 // POST /api/diagrams — create a new diagram
 // ---------------------------------------------------------------------------
 
-app.post('/api/diagrams', requirePassphrase, (req, res) => {
+app.post('/api/diagrams', requireHubAccess, (req, res) => {
   const { title } = req.body;
   if (!title || typeof title !== 'string' || title.trim().length === 0) {
     return res.status(400).json({ error: 'title is required.' });
@@ -236,7 +477,7 @@ app.post('/api/diagrams', requirePassphrase, (req, res) => {
 // GET /api/diagrams — list all diagrams (passphrase required)
 // ---------------------------------------------------------------------------
 
-app.get('/api/diagrams', requirePassphrase, (_req, res) => {
+app.get('/api/diagrams', requireHubAccess, (_req, res) => {
   const rows = db.prepare(
     'SELECT id, title, updated_at AS updatedAt, passphrase FROM diagrams ORDER BY updated_at DESC'
   ).all();
@@ -437,11 +678,13 @@ function serializeComment(row, replies) {
     body:       row.body,
     createdAt:  row.created_at,
     resolvedAt: row.resolved_at,
+    authorId:   row.author_id,
     replies: replies.map(r => ({
       id:         r.id,
       authorName: r.author_name,
       body:       r.body,
       createdAt:  r.created_at,
+      authorId:   r.author_id,
     })),
   };
 }
@@ -502,9 +745,9 @@ app.post('/api/diagrams/:id/comments', (req, res) => {
   const commentId = generateId();
   const now = Date.now();
   db.prepare(`
-    INSERT INTO comments (id, diagram_id, x, y, priority, status, author_name, body, created_at, resolved_at)
-    VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, NULL)
-  `).run(commentId, id, x, y, cleanPriority, req.body.authorName.trim(), req.body.body.trim(), now);
+    INSERT INTO comments (id, diagram_id, x, y, priority, status, author_name, body, created_at, resolved_at, author_id)
+    VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, NULL, ?)
+  `).run(commentId, id, x, y, cleanPriority, req.body.authorName.trim(), req.body.body.trim(), now, req.user.author_id);
 
   const row = db.prepare('SELECT * FROM comments WHERE id = ?').get(commentId);
   return res.status(201).json(serializeComment(row, []));
@@ -531,9 +774,9 @@ app.post('/api/diagrams/:id/comments/:commentId/replies', (req, res) => {
   const replyId = generateId();
   const now = Date.now();
   db.prepare(`
-    INSERT INTO comment_replies (id, comment_id, author_name, body, created_at)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(replyId, commentId, req.body.authorName.trim(), req.body.body.trim(), now);
+    INSERT INTO comment_replies (id, comment_id, author_name, body, created_at, author_id)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(replyId, commentId, req.body.authorName.trim(), req.body.body.trim(), now, req.user.author_id);
 
   const replies = db.prepare('SELECT * FROM comment_replies WHERE comment_id = ? ORDER BY created_at ASC').all(commentId);
   return res.status(201).json(serializeComment(comment, replies));
@@ -585,23 +828,29 @@ app.patch('/api/diagrams/:id/comments/:commentId', (req, res) => {
 });
 
 // DELETE /api/diagrams/:id/comments/:commentId — permanently delete a comment
-// thread and its replies. Gated by the MASTER/shared passphrase specifically
-// (requirePassphrase), matching the admin-only gate already used for
-// resolve/reopen — deleting is irreversible, more so than resolving.
-app.delete('/api/diagrams/:id/comments/:commentId', requirePassphrase, (req, res) => {
+// thread and its replies. Gated by the creator's author_id OR the MASTER/shared passphrase (admin).
+app.delete('/api/diagrams/:id/comments/:commentId', (req, res) => {
   const { id, commentId } = req.params;
   const diagram = getDiagramRow(id);
   if (!diagram) {
     return res.status(404).json({ error: 'Diagram not found.' });
   }
 
-  const comment = db.prepare('SELECT id FROM comments WHERE id = ? AND diagram_id = ?').get(commentId, id);
+  const comment = db.prepare('SELECT id, author_id FROM comments WHERE id = ? AND diagram_id = ?').get(commentId, id);
   if (!comment) {
     return res.status(404).json({ error: 'Comment thread not found.' });
   }
 
+  // Check if they are the author of the comment OR if they provided the master passphrase
+  const providedPass = req.headers['x-edit-passphrase'] || '';
+  const isAdmin = passphraseValid(providedPass);
+  const isAuthor = req.user && comment.author_id === req.user.author_id;
+
+  if (!isAdmin && !isAuthor) {
+    return res.status(403).json({ error: 'You are not authorized to delete this comment.' });
+  }
+
   // No SQL foreign keys are declared, so cascade-delete replies manually
-  // (same pattern as DELETE /api/diagrams/:id above).
   db.prepare('DELETE FROM comment_replies WHERE comment_id = ?').run(commentId);
   db.prepare('DELETE FROM comments WHERE id = ?').run(commentId);
 
