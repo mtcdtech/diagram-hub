@@ -17,6 +17,7 @@ This workspace contains the `diagram-hub` project: a Node.js companion app for a
 - **Concurrent-Edit Banner**: Light polling loop that compares diagram metadata and warns users when someone else has saved a newer version.
 
 ## Version History
+- **v1.3.1**: Implemented `/api/iam/roles` IAM sync endpoint, prioritized `ms_email` display username per Display Rule, and denied access to users without mapped role groups.
 - **v1.3.0**: Auto-populate author name from SSO profiles, replaced confirm browser alert with inline delete warnings inside comment cards, and added support for mapping user roles (admin, editor, commenter) to Authentik groups.
 - **v1.2.0**: Added Authentik SSO OIDC authentication support, session storage in SQLite database, creator-based comment thread deletion ownership via commenter session cookies or SSO email accounts, and identity pill indicator components in headers.
 - **v1.1.0**: Removed passphrase gate for adding/replying/updating/positioning comments; fixed comments dot drifting by tracking scroll offsets and subscribing to mxGraph view changes.

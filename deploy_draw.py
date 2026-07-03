@@ -43,6 +43,7 @@ def get_stack_file():
       - OIDC_CLIENT_ID=diagram-hub
       - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET}
       - APP_URL=https://draw.server.mtcd.org
+      - ADMIN_PORTAL_API_TOKEN=${ADMIN_PORTAL_API_TOKEN}
     volumes:
       - diagram_hub_data:/data
 
@@ -63,11 +64,12 @@ def update_stack():
     
     env = stack.get("Env", [])
     # Remove existing managed environment variables
-    managed_keys = {"IMAGE_TAG", "OIDC_CLIENT_SECRET"}
+    managed_keys = {"IMAGE_TAG", "OIDC_CLIENT_SECRET", "ADMIN_PORTAL_API_TOKEN"}
     env = [e for e in env if e.get("name") not in managed_keys]
     
     env.append({"name": "IMAGE_TAG", "value": get_git_sha()})
     env.append({"name": "OIDC_CLIENT_SECRET", "value": "ak_diagram_hub_secret_very_secure_987654"})
+    env.append({"name": "ADMIN_PORTAL_API_TOKEN", "value": "ak_diagram_hub_iam_sync_token_2026"})
     
     payload = {
         "StackFileContent": stack_file,

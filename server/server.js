@@ -224,11 +224,22 @@ function extractGroupsFromClaims(claims) {
 }
 
 function resolveUserRole(groups) {
+  const userGroups = (groups || []).map(g => g.trim().toLowerCase());
+  
+  if (userGroups.includes('app_diagram-hub_admin')) {
+    return 'admin';
+  }
+  if (userGroups.includes('app_diagram-hub_editor')) {
+    return 'editor';
+  }
+  if (userGroups.includes('app_diagram-hub_commenter')) {
+    return 'commenter';
+  }
+  
+  // Fallback to configured group patterns
   const adminGroups = parseGroupList(OIDC_ADMIN_GROUPS);
   const editorGroups = parseGroupList(OIDC_EDITOR_GROUPS);
   const commenterGroups = parseGroupList(OIDC_COMMENTER_GROUPS);
-  
-  const userGroups = (groups || []).map(g => g.trim().toLowerCase());
   
   if (userGroups.some(g => adminGroups.includes(g))) {
     return 'admin';
@@ -240,11 +251,8 @@ function resolveUserRole(groups) {
     return 'commenter';
   }
   
-  const defaultRole = OIDC_DEFAULT_ROLE.trim().toLowerCase();
-  if (['admin', 'editor', 'commenter'].includes(defaultRole)) {
-    return defaultRole;
-  }
-  return 'commenter';
+  // If we have no groups, deny access instead of returning commenter
+  return null;
 }
 
 let cachedOidcMetadata = null;
@@ -370,6 +378,40 @@ function sendVersionedHtml(res, filePath) {
 }
 
 // ---------------------------------------------------------------------------
+// IAM Integration Roles Endpoint
+// ---------------------------------------------------------------------------
+app.get('/api/iam/roles', (req, res) => {
+  const authHeader = req.headers['authorization'] || '';
+  const expectedToken = process.env.ADMIN_PORTAL_API_TOKEN;
+  
+  if (expectedToken) {
+    if (authHeader !== `Bearer ${expectedToken}`) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+  }
+  
+  return res.json({
+    roles: [
+      {
+        id: "admin",
+        name: "Administrator",
+        description: "Full access to manage all diagrams, settings, and resolve comments."
+      },
+      {
+        id: "editor",
+        name: "Diagram Editor",
+        description: "Can create and edit diagrams, add comments, and delete own comments."
+      },
+      {
+        id: "commenter",
+        name: "Commenter",
+        description: "Can view diagrams, add comments, and delete own comments."
+      }
+    ]
+  });
+});
+
+// ---------------------------------------------------------------------------
 // SSO Authentication Routes
 // ---------------------------------------------------------------------------
 
@@ -467,7 +509,11 @@ app.get('/api/auth/sso/callback', async (req, res) => {
     
     const tokenData = await tokenRes.json();
     const claims = tokenData.id_token ? decodeJwt(tokenData.id_token) : {};
-    const email = (claims.email || '').toLowerCase();
+    
+    // Prioritize ms_email over email per Display Rule
+    const msEmail = (claims.ms_email || '').toLowerCase().trim();
+    const primaryEmail = (claims.email || '').toLowerCase().trim();
+    const email = msEmail || primaryEmail;
     const name = claims.name || claims.preferred_username || email;
     
     if (!email) {
@@ -477,6 +523,10 @@ app.get('/api/auth/sso/callback', async (req, res) => {
     // Extract groups and resolve user role
     const groups = extractGroupsFromClaims(claims);
     const role = resolveUserRole(groups);
+    
+    if (!role) {
+      return res.status(403).send('Access Denied: You do not have permission groups assigned for Diagram Hub. Please contact your administrator.');
+    }
     
     // Generate session
     const sid = crypto.randomBytes(24).toString('hex');
