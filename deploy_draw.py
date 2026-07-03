@@ -39,6 +39,10 @@ def get_stack_file():
     environment:
       - EDIT_PASSPHRASE=EXseaBWGVaY9Kv6XPQlG-9FMWEcJEbjV
       - DRAWIO_EMBED_URL=https://draw-edit.server.mtcd.org/
+      - OIDC_ISSUER_URL=https://auth.server.mtcd.org/application/o/diagram-hub/
+      - OIDC_CLIENT_ID=diagram-hub
+      - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET}
+      - APP_URL=https://draw.server.mtcd.org
     volumes:
       - diagram_hub_data:/data
 
@@ -58,9 +62,12 @@ def update_stack():
     stack_file = get_stack_file()
     
     env = stack.get("Env", [])
-    # Remove existing IMAGE_TAG if present
-    env = [e for e in env if e.get("name") != "IMAGE_TAG"]
+    # Remove existing managed environment variables
+    managed_keys = {"IMAGE_TAG", "OIDC_CLIENT_SECRET"}
+    env = [e for e in env if e.get("name") not in managed_keys]
+    
     env.append({"name": "IMAGE_TAG", "value": get_git_sha()})
+    env.append({"name": "OIDC_CLIENT_SECRET", "value": "ak_diagram_hub_secret_very_secure_987654"})
     
     payload = {
         "StackFileContent": stack_file,
