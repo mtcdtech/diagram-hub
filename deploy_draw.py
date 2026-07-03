@@ -48,9 +48,10 @@ volumes:
 
 def get_git_sha():
     try:
-        return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"]).decode().strip()
+        return subprocess.check_output(["git", "rev-parse", "HEAD"]).decode().strip()
     except Exception:
         return "latest"
+
 
 def update_stack():
     stack = get_stack()
