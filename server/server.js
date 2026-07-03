@@ -799,7 +799,7 @@ app.post('/api/admin/change-passphrase', requireAdminAccess, (req, res) => {
 });
 
 // POST /api/admin/iam/sync — force trigger role synchronization on Admin Portal
-app.post('/api/admin/iam/sync', requireAdminAccess, async (req, res) => {
+app.post('/api/admin/iam/sync', requireHubAccess, async (req, res) => {
   try {
     const adminPortalUrl = 'https://admin.server.mtcd.org';
     const syncUrl = `${adminPortalUrl}/iam/api/webapps/diagram-hub/sync-token`;

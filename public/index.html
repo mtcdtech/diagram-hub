@@ -45,7 +45,7 @@
       </div>
     </div>
     <footer class="app-footer" style="text-align: center; font-size: 0.75rem; color: var(--color-text-muted, #888); margin-top: 2rem; padding: 1rem 0; border-top: 1px solid var(--color-border, #eee);">
-      Diagram Hub v1.4.1
+      Diagram Hub v1.4.2
     </footer>
   </div>
 
@@ -81,7 +81,7 @@
       </ul>
     </div>
     <footer class="app-footer" style="text-align: center; font-size: 0.75rem; color: var(--color-text-muted, #888); margin-top: 2rem; padding: 1rem 0; border-top: 1px solid var(--color-border, #eee);">
-      Diagram Hub v1.4.1
+      Diagram Hub v1.4.2
     </footer>
   </div>
 
@@ -366,11 +366,7 @@
     const iamAdminSection = document.getElementById('iam-admin-section');
     const iamSyncStatus = document.getElementById('iam-sync-status');
     if (iamAdminSection) {
-      if (currentUser && currentUser.role === 'admin') {
-        iamAdminSection.classList.remove('hidden');
-      } else {
-        iamAdminSection.classList.add('hidden');
-      }
+      iamAdminSection.classList.remove('hidden');
     }
     if (iamSyncStatus) {
       iamSyncStatus.classList.add('hidden');
